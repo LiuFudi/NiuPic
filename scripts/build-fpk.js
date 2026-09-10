@@ -109,6 +109,66 @@ function commandExists(command) {
   return probe.status === 0;
 }
 
+/**
+ * 递归删除 node_modules 下的 .bin 目录，并清掉所有软链接。
+ *
+ * 飞牛的安装器解压 app.tgz 时无法处理「目标不存在的绝对软链接」，
+ * 会直接报「解压app.tgz失败」。pnpm 在 Linux/macOS 上恰好就会生成这种链接。
+ */
+function stripBinAndSymlinks(root) {
+  let removedBins = 0;
+  let removedLinks = 0;
+
+  const walk = (dir) => {
+    let entries;
+    try {
+      entries = fs.readdirSync(dir, { withFileTypes: true });
+    } catch (e) {
+      return;
+    }
+    for (const entry of entries) {
+      const full = path.join(dir, entry.name);
+      let st;
+      try {
+        st = fs.lstatSync(full);
+      } catch (e) {
+        continue;
+      }
+      if (st.isSymbolicLink()) {
+        fs.unlinkSync(full);
+        removedLinks += 1;
+        continue;
+      }
+      if (!st.isDirectory()) continue;
+      if (entry.name === '.bin') {
+        fs.rmSync(full, { recursive: true, force: true });
+        removedBins += 1;
+        continue;
+      }
+      walk(full);
+    }
+  };
+
+  walk(root);
+
+  // 再扫一遍，确认真的没有软链接了 —— 有的话宁可让构建失败，也别生成装不上的包
+  const leftovers = [];
+  const verify = (dir) => {
+    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+      const full = path.join(dir, entry.name);
+      const st = fs.lstatSync(full);
+      if (st.isSymbolicLink()) leftovers.push(full);
+      else if (st.isDirectory()) verify(full);
+    }
+  };
+  verify(root);
+  if (leftovers.length) {
+    fail(`node_modules 里仍有 ${leftovers.length} 个软链接，飞牛解压会失败：\n  ${leftovers.slice(0, 5).join('\n  ')}`);
+  }
+
+  log(`   清理了 ${removedBins} 个 .bin 目录、${removedLinks} 个软链接`);
+}
+
 function detectPackageManager() {
   for (const pm of ['pnpm', 'npm']) {
     if (commandExists(pm)) return pm;
@@ -292,6 +352,14 @@ const TOTAL_STEPS = SKIP_DEPS ? 4 : 6;
   if (!fs.existsSync(depsNodeModules)) fail('build/server-deps/node_modules 不存在');
   fs.cpSync(depsNodeModules, nm(''), { recursive: true });
   log(`   node_modules 就位: ${(fs.readdirSync(nm('')).length)} 个顶层条目`);
+
+  // pnpm 在 Linux/macOS 上会把 node_modules/.bin 建成**软链接**，而且指向构建机的
+  // 绝对路径（例如 /home/me/project/build/server-deps/node_modules/...）。
+  // 这些链接打进 fpk 后目标根本不存在，飞牛安装器解压 app.tgz 会直接失败，
+  // 报错就是「解压app.tgz失败」。.bin 只是给命令行用的 shim，运行时不依赖它，
+  // 所以整目录删掉即可（Windows 上生成的是 .CMD/.ps1 文件，删掉同样无害）。
+  stripBinAndSymlinks(nm(''));
+  log('   已清理 node_modules/.bin 与残留软链接（否则飞牛解压会失败）');
 
   // ---------- 4. 放入原生模块预编译产物 ----------
   step(stepNo++, TOTAL_STEPS, '安装原生模块预编译产物');
