@@ -1,0 +1,14 @@
+{
+    "data-share": {
+        "shares": [
+            {
+                "name": "niupic",
+                "permission": {
+                    "rw": [
+                        "niupic"
+                    ]
+                }
+            }
+        ]
+    }
+}

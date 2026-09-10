@@ -1,0 +1,67 @@
+# 依赖目录
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# 构建输出
+dist/
+build/
+out/
+*.log
+
+# 环境变量文件
+.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+
+# IDE 和编辑器
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# 操作系统文件
+Thumbs.db
+desktop.ini
+
+# 临时文件
+*.tmp
+*.temp
+.cache/
+.temp/
+
+# 测试覆盖率
+coverage/
+*.coverage
+.nyc_output/
+
+# 知识库文件夹 - 不同步到 GitHub
+Knowledge base/
+
+# 构建输出
+dist/
+niupic.zip
+nipic.zip
+
+# 飞牛应用包里的后端目录是构建产物（scripts/build*.js 会自动生成）
+# 不要把 backend/ 的副本提交进来 —— 两份代码并存很容易改错地方
+niupic/app/server/
+
+# 原生模块二进制（按平台生成，不进仓库）
+*.node
+!niupic/app/ui/**
+
+# 测试数据
+test-library/
+*.db
+*.db-shm
+*.db-wal
+
+# 根目录放的 logo 原图（相同内容已收录为 design/logo.png）
+/牛图.png

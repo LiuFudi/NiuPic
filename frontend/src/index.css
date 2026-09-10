@@ -1,0 +1,216 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+body {
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Oxygen',
+    'Ubuntu', 'Cantarell', 'Fira Sans', 'Droid Sans', 'Helvetica Neue',
+    sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  /* 全局使用语义变量，避免暗色模式下文本仍然是黑色 */
+  background-color: var(--bg-primary);
+  color: var(--text-primary);
+}
+
+#root {
+  width: 100vw;
+  height: 100vh;
+  overflow: hidden;
+}
+
+/* ==================== 主题系统 - CSS 变量方案 ==================== */
+/* 轻量、快速、稳定 - 仅定义核心变量，让 Tailwind 自动处理 */
+
+:root {
+  /* 亮色主题变量 */
+  --bg-primary: #ffffff;
+  --bg-secondary: #f9fafb;
+  --bg-tertiary: #f3f4f6;
+  --text-primary: #111827;
+  --text-secondary: #6b7280;
+  --border-color: #e5e7eb;
+  --hover-bg: #f3f4f6;
+}
+
+.dark {
+  /* 暗色主题变量 - 护眼优化版 */
+  /* 基于色彩心理学：避免纯黑，降低对比度，微暖色调 */
+  --bg-primary: #1e1e1e;      /* 主背景（避免纯黑 #171717，减少眼疲劳） */
+  --bg-secondary: #2c2c2c;    /* 侧边栏（从 #252525 调亮，增加层次） */
+  --bg-tertiary: #323232;     /* 三级背景（从 #2a2a2a 调亮） */
+  --text-primary: #d4d4d4;    /* 主文字（从 #e0e0e0 降低，减少对比度） */
+  --text-secondary: #a8a8a8;  /* 次要文字（从 #b0b0b0 微调） */
+  --border-color: #3a3a3a;    /* 边框（从 #333333 调亮，更柔和） */
+  --hover-bg: #323232;        /* 悬停背景 */
+}
+
+/* ==================== 语义颜色类（使用 CSS 变量） ==================== */
+/* 这些类名在 JSX 中广泛使用，这里把它们真正映射到变量上 */
+
+.bg-primary {
+  background-color: var(--bg-primary);
+}
+
+.bg-secondary {
+  background-color: var(--bg-secondary);
+}
+
+.bg-tertiary {
+  background-color: var(--bg-tertiary);
+}
+
+.text-primary {
+  color: var(--text-primary);
+}
+
+.text-secondary {
+  color: var(--text-secondary);
+}
+
+.text-tertiary {
+  color: var(--text-secondary);
+  opacity: 0.85;
+}
+
+/* ==================== 必要的暗色主题覆盖 ==================== */
+/* 只保留真正需要自定义的样式 */
+
+/* 图片背景保持透明 */
+.dark img {
+  background-color: transparent !important;
+}
+
+/* 输入框样式 - 护眼优化 */
+.dark input,
+.dark select,
+.dark textarea {
+  background-color: #1e1e1e;  /* 使用主背景色 */
+  border-color: #3a3a3a;      /* 使用优化后的边框色 */
+  color: #d4d4d4;             /* 使用优化后的主文字色 */
+}
+
+.dark input:focus,
+.dark select:focus,
+.dark textarea:focus {
+  border-color: #5a5a5a;      /* 焦点时稍微亮一点 */
+  outline: none;
+}
+
+.dark input::placeholder {
+  color: #7a7a7a;             /* 占位符颜色调亮 */
+}
+
+/* Custom scrollbar */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+/* 亮色主题滚动条 */
+::-webkit-scrollbar-thumb {
+  background: rgba(0, 0, 0, 0.15);  /* 降低不透明度，更柔和 */
+  border-radius: 4px;
+  transition: background 0.2s ease;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(0, 0, 0, 0.25);  /* 悬停时稍微明显 */
+}
+
+/* 暗色主题滚动条 - 护眼优化 */
+.dark ::-webkit-scrollbar-track {
+  background: rgba(255, 255, 255, 0.03);  /* 极淡背景 */
+}
+
+.dark ::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.15);  /* 降低亮度，减少刺激 */
+  border-radius: 4px;
+  transition: background 0.2s ease;
+}
+
+.dark ::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.25);  /* 悬停时更明显 */
+}
+
+/* Toast 滑入动画 */
+@keyframes slide-up {
+  from {
+    transform: translate(-50%, 100px);
+    opacity: 0;
+  }
+  to {
+    transform: translate(-50%, 0);
+    opacity: 1;
+  }
+}
+
+.animate-slide-up {
+  animation: slide-up 0.3s ease-out;
+}
+
+/* ==================== 全屏图片查看器 ==================== */
+
+/* 打开时的淡入，避免黑幕突然铺满 */
+@keyframes niupic-viewer-fade-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+.niupic-viewer-enter {
+  animation: niupic-viewer-fade-in 0.16s ease-out;
+}
+
+/* 缩放/平移交给合成层，保证大图滚轮缩放跟手 */
+.niupic-viewer-image {
+  image-rendering: auto;
+  will-change: transform, opacity;
+  backface-visibility: hidden;
+}
+
+/* 底部工具栏缩放条（暗色） */
+.niupic-viewer-slider {
+  -webkit-appearance: none;
+  appearance: none;
+  height: 4px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.28);
+  outline: none;
+  cursor: pointer;
+}
+
+.niupic-viewer-slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 13px;
+  height: 13px;
+  border-radius: 50%;
+  background: #ffffff;
+  border: none;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.5);
+  cursor: pointer;
+}
+
+.niupic-viewer-slider::-moz-range-thumb {
+  width: 13px;
+  height: 13px;
+  border: none;
+  border-radius: 50%;
+  background: #ffffff;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.5);
+  cursor: pointer;
+}

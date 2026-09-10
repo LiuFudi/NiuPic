@@ -1,0 +1,15 @@
+{
+  ".url": {
+    "niupic.Application": {
+      "title": "牛图 NiuPic",
+      "icon": "images/icon-{0}.png",
+      "type": "url",
+      "protocol": "http",
+      "port": "15002",
+      "allUsers": false,
+      "control": {
+        "portPerm": "editable"
+      }
+    }
+  }
+}
