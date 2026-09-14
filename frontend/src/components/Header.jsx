@@ -1,10 +1,11 @@
 import { useState, useEffect, useMemo, useRef } from 'react';
-import { Sun, Moon, Search, Filter, Sliders, RefreshCw, Star, ArrowUpDown, ArrowUp, ArrowDown, Shuffle } from 'lucide-react';
+import { Sun, Moon, Search, Filter, Sliders, RefreshCw, Star, ArrowUpDown, ArrowUp, ArrowDown, Shuffle, Palette } from 'lucide-react';
 import { useLibraryStore } from '../stores/useLibraryStore';
 import { useImageStore, SORT_OPTIONS } from '../stores/useImageStore';
 import { useUIStore } from '../stores/useUIStore';
 import { useScanStore } from '../stores/useScanStore';
 import { useTheme } from '../hooks/useTheme';
+import ThemeColorPicker from './ThemeColorPicker';
 import { libraryAPI, scanAPI, watchAPI } from '../api';
 import { createLogger } from '../utils/logger';
 
@@ -18,10 +19,11 @@ function Header() {
     sort, setSort, toggleSortOrder, reshuffle,
   } = useImageStore();
   const { thumbnailHeight, setThumbnailHeight, mobileView } = useUIStore();
-  const { theme, toggleTheme } = useTheme();
+  const { theme, toggleTheme, accentColor } = useTheme();
   
   const [showFilters, setShowFilters] = useState(false);
   const [showSort, setShowSort] = useState(false);
+  const [showColorPicker, setShowColorPicker] = useState(false);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [isMobile, setIsMobile] = useState(false);
   const [showMobileSettings, setShowMobileSettings] = useState(false);
@@ -340,6 +342,7 @@ function Header() {
             <button
               onClick={() => setShowMobileSettings(!showMobileSettings)}
               className="p-2 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors"
+              title="设置（含主题色）"
             >
               <Sliders className="w-5 h-5 text-gray-700 dark:text-gray-300" />
             </button>
@@ -419,9 +422,14 @@ function Header() {
                 onChange={(e) => handleThumbnailHeightChange(parseInt(e.target.value))}
                 className="w-full h-2 bg-gray-200 dark:bg-gray-700 rounded-lg appearance-none cursor-pointer"
                 style={{
-                  background: `linear-gradient(to right, #3b82f6 0%, #3b82f6 ${((thumbnailHeight - 150) / 150) * 100}%, #e5e7eb ${((thumbnailHeight - 150) / 150) * 100}%, #e5e7eb 100%)`
+                  background: `linear-gradient(to right, rgb(var(--accent-500)) 0%, rgb(var(--accent-500)) ${((thumbnailHeight - 150) / 150) * 100}%, #e5e7eb ${((thumbnailHeight - 150) / 150) * 100}%, #e5e7eb 100%)`
                 }}
               />
+
+              {/* 主题色 */}
+              <div className="pt-3 border-t border-gray-200 dark:border-gray-700">
+                <ThemeColorPicker />
+              </div>
             </div>
           </div>
         )}
@@ -631,7 +639,7 @@ function Header() {
             {(selectedFormats.length > 0 || selectedSizes.length > 0 || selectedOrientations.length > 0 || selectedRatings.length > 0) && (
               <span 
                 className="absolute -bottom-0.5 -right-0.5 w-3 h-3 rounded-full" 
-                style={{ backgroundColor: '#3b82f6' }}
+                style={{ backgroundColor: 'rgb(var(--accent-500))' }}
               ></span>
             )}
           </button>
@@ -679,6 +687,28 @@ function Header() {
           </button>
           
           <button
+            onClick={() => {
+              setShowColorPicker(!showColorPicker);
+              setShowSort(false);
+              setShowFilters(false);
+            }}
+            className={`p-2 rounded-lg transition-colors ${
+              showColorPicker
+                ? 'bg-gray-100 dark:bg-gray-700'
+                : 'hover:bg-gray-100 dark:hover:bg-gray-700'
+            }`}
+            title="主题色"
+            data-testid="theme-color-button"
+          >
+            {accentColor ? (
+              // 换过主题色就用当前颜色画图标，一眼能看出现在的主题色
+              <Palette className="w-5 h-5" style={{ color: accentColor }} />
+            ) : (
+              <Palette className="w-5 h-5 text-gray-700 dark:text-gray-300" />
+            )}
+          </button>
+
+          <button
             onClick={toggleTheme}
             className="p-2 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors"
             title={theme === 'light' ? '切换到暗色模式' : '切换到亮色模式'}
@@ -694,6 +724,15 @@ function Header() {
 
       {/* 排序面板（桌面端）—— 必须放在 h-14 工具栏之外，否则会被固定高度裁掉 */}
       {showSort && renderSortPanel('px-6 pb-3')}
+
+      {/* 主题色面板（桌面端）—— 同样必须在 h-14 工具栏之外 */}
+      {showColorPicker && (
+        <div className="px-6 pb-3">
+          <div className="p-4 bg-gray-50 dark:bg-gray-700 rounded-lg">
+            <ThemeColorPicker />
+          </div>
+        </div>
+      )}
 
       {/* 筛选面板 */}
       {showFilters && (

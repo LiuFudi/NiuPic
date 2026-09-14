@@ -52,6 +52,7 @@ function loadConfig(forceReload = false) {
     const defaultConfig = {
       libraries: [],
       theme: 'light',
+      themeColor: '',   // '' = 内置默认蓝；否则是 '#rrggbb'
       currentLibraryId: null,
       // UI preferences
       preferences: {
@@ -78,6 +79,11 @@ function loadConfig(forceReload = false) {
         columnGap: 16
       };
     }
+
+    // 主题色：老配置里没有这个字段，补成 ''（= 默认蓝）
+    if (typeof config.themeColor !== 'string') {
+      config.themeColor = '';
+    }
     
     // 更新缓存
     configCache = config;
@@ -89,6 +95,7 @@ function loadConfig(forceReload = false) {
     return {
       libraries: [],
       theme: 'light',
+      themeColor: '',
       currentLibraryId: null,
       preferences: {
         thumbnailHeight: 200,
@@ -222,6 +229,17 @@ function updateTheme(theme) {
   return true;
 }
 
+/**
+ * Update theme color (accent color)
+ * @param {string} themeColor '#rrggbb'；空串 = 恢复内置默认蓝
+ */
+function updateThemeColor(themeColor) {
+  const config = loadConfig();
+  config.themeColor = themeColor || '';
+  saveConfig(config);
+  return config.themeColor;
+}
+
 module.exports = {
   getConfigDir,
   getConfigPath,
@@ -234,5 +252,6 @@ module.exports = {
   getLibrary,
   setCurrentLibrary,
   updatePreferences,
-  updateTheme
+  updateTheme,
+  updateThemeColor
 };

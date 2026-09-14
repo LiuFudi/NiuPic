@@ -108,7 +108,7 @@ const ImageCell = ({
             onClick={(e) => e.stopPropagation()}
             className="w-full text-xs text-center bg-transparent border-none outline-none focus:outline-none underline decoration-2 decoration-blue-500 underline-offset-2 truncate leading-none"
             style={{ 
-              color: isSelected ? '#3b82f6' : '#909090',
+              color: isSelected ? 'rgb(var(--accent-500))' : '#909090',
               fontWeight: isSelected ? '600' : '400',
               padding: 0,
               margin: 0,
@@ -120,7 +120,7 @@ const ImageCell = ({
           <p 
             className="text-xs truncate text-center transition-colors cursor-text m-0 leading-none"
             style={{ 
-              color: isSelected ? '#3b82f6' : '#909090',
+              color: isSelected ? 'rgb(var(--accent-500))' : '#909090',
               fontWeight: isSelected ? '600' : '400',
               height: '1rem'
             }}

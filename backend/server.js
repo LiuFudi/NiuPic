@@ -65,14 +65,11 @@ const configManager = {
   // 兼容两种命名风格
   load: () => config.loadConfig(),
   save: (data) => config.saveConfig(data),
-  loadConfig: () => config.loadConfig(),
-  saveConfig: (data) => config.saveConfig(data),
-  addLibrary: (name, path) => config.addLibrary(name, path),
-  removeLibrary: (id) => config.removeLibrary(id),
-  updateLibrary: (id, updates) => config.updateLibrary(id, updates),
-  setCurrentLibrary: (id) => config.setCurrentLibrary(id),
-  updatePreferences: (prefs) => config.updatePreferences(prefs),
-  updateTheme: (theme) => config.updateTheme(theme)
+  // 其余的一次性全带进来。
+  // 这里原本是手写白名单，新增配置项时忘了同步就会让对应接口 500
+  // —— 主题色就这么踩过一次（界面看着正常，其实根本没存下来），
+  // 所以改成从 utils/config 的导出自动展开，不再逐个手写。
+  ...config
 };
 
 const dependencies = {

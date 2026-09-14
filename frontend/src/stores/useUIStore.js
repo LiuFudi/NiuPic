@@ -7,7 +7,10 @@ import { create } from 'zustand';
 export const useUIStore = create((set) => ({
   // 主题
   theme: 'light',
-  
+
+  // 主题色（强调色）。null = 用 CSS 里的默认蓝，非空时是 '#rrggbb'
+  accentColor: null,
+
   // 移动端视图
   mobileView: 'main', // 'sidebar' | 'main' | 'detail'
   
@@ -24,6 +27,9 @@ export const useUIStore = create((set) => ({
   toggleTheme: () => set((state) => ({ 
     theme: state.theme === 'light' ? 'dark' : 'light' 
   })),
+
+  // 主题色
+  setAccentColor: (accentColor) => set({ accentColor }),
   
   // 移动端视图
   setMobileView: (view) => set({ mobileView: view }),

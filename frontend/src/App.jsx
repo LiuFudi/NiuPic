@@ -7,6 +7,7 @@ import { useScanStore } from './stores/useScanStore';
 import { useTheme } from './hooks/useTheme';
 import { libraryAPI, imageAPI, scanAPI } from './api';
 import domCleanup from './utils/domCleanup';
+import { normalizeHex, isDefaultAccent } from './utils/accentColor';
 import Sidebar from './components/Sidebar';
 import MainContent from './components/MainContent';
 import RightPanel from './components/RightPanel';
@@ -199,6 +200,11 @@ function App() {
       // 加载主题和偏好设置
       if (data.theme) {
         useUIStore.getState().setTheme(data.theme);
+      }
+      // 主题色：'' 或非法值 = 用内置默认蓝（null）
+      const savedAccent = normalizeHex(data.themeColor);
+      if (!isDefaultAccent(savedAccent)) {
+        useUIStore.getState().setAccentColor(savedAccent);
       }
       if (data.preferences) {
         const { thumbnailHeight, leftPanelWidth, rightPanelWidth } = data.preferences;

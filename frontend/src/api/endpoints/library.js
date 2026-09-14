@@ -72,6 +72,14 @@ export async function updateTheme(theme) {
 }
 
 /**
+ * 更新主题色（强调色）
+ * @param {string} themeColor - '#rrggbb'；空串表示恢复内置默认蓝
+ */
+export async function updateThemeColor(themeColor) {
+  return api.put('/library/theme-color', { themeColor });
+}
+
+/**
  * 验证素材库路径是否存在
  */
 export async function validate(id) {

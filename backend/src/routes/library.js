@@ -5,7 +5,7 @@
 
 const express = require('express');
 const router = express.Router();
-const { asyncHandler } = require('../middleware/errorHandler');
+const { asyncHandler, ValidationError } = require('../middleware/errorHandler');
 const { validateRequired } = require('../middleware/validator');
 
 // 服务实例（从 app 中获取）
@@ -83,6 +83,27 @@ router.put('/theme',
   asyncHandler(async (req, res) => {
     const { theme } = req.body;
     const result = libraryService.updateTheme(theme);
+    res.json({ success: true, data: result });
+  })
+);
+
+/**
+ * 更新主题色（强调色，必须在 /:id 之前）
+ * PUT /api/library/theme-color
+ * Body: { themeColor: '#rrggbb' | '' }   —— '' 表示恢复内置默认蓝
+ *
+ * 不能用 validateRequired：空串是「恢复默认」的合法取值，会被它当成缺参数。
+ */
+router.put('/theme-color',
+  (req, res, next) => {
+    if (typeof req.body?.themeColor !== 'string') {
+      return next(new ValidationError('themeColor is required', 'themeColor'));
+    }
+    next();
+  },
+  asyncHandler(async (req, res) => {
+    const { themeColor } = req.body;
+    const result = libraryService.updateThemeColor(themeColor);
     res.json({ success: true, data: result });
   })
 );

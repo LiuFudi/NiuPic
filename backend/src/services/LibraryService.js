@@ -28,6 +28,7 @@ class LibraryService {
       libraries: config.libraries || [],
       currentLibraryId: config.currentLibraryId,
       theme: config.theme || 'light',
+      themeColor: config.themeColor || '',
       preferences: config.preferences || {}
     };
   }
@@ -236,6 +237,23 @@ class LibraryService {
 
     this.configManager.updateTheme(theme);
     return { success: true, theme };
+  }
+
+  /**
+   * 更新主题色（强调色）
+   * 只收 '#rrggbb'；空串表示恢复内置默认蓝。
+   * 50~950 的色阶由前端根据这个基础色生成，这里只负责校验与落盘。
+   */
+  updateThemeColor(themeColor) {
+    const value = typeof themeColor === 'string' ? themeColor.trim() : '';
+
+    if (value !== '' && !/^#[0-9a-fA-F]{6}$/.test(value)) {
+      throw new ValidationError('主题色必须是 #rrggbb 格式（空串表示恢复默认）', 'themeColor');
+    }
+
+    const saved = this.configManager.updateThemeColor(value.toLowerCase());
+    logger.system(`更新主题色: ${saved || '（默认蓝）'}`);
+    return { success: true, themeColor: saved };
   }
 
   /**

@@ -37,6 +37,22 @@ body {
   --text-secondary: #6b7280;
   --border-color: #e5e7eb;
   --hover-bg: #f3f4f6;
+
+  /* 主题色（强调色）默认值 = 蓝色，见 tailwind.config.js 里 blue 族的映射。
+     用户在「主题色」面板里选过之后，这几行会被内联样式覆盖（src/utils/accentColor.js）。
+     写成 "R G B" 三元组是为了支持 bg-blue-500/40 这种透明度写法。
+     这组数值由 accentColor.js 按 #3b82f6 生成，和 Tailwind 官方 blue 几乎一致。 */
+  --accent-50: 240 246 254;
+  --accent-100: 222 233 253;
+  --accent-200: 193 215 250;
+  --accent-300: 150 187 248;
+  --accent-400: 99 155 248;
+  --accent-500: 60 131 246;
+  --accent-600: 30 108 235;
+  --accent-700: 25 91 199;
+  --accent-800: 29 77 155;
+  --accent-900: 25 62 123;
+  --accent-950: 18 43 84;
 }
 
 .dark {
