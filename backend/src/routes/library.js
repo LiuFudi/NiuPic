@@ -10,13 +10,35 @@ const { validateRequired } = require('../middleware/validator');
 
 // 服务实例（从 app 中获取）
 let libraryService;
+let accessibleFoldersService;
 
 router.use((req, res, next) => {
   if (!libraryService) {
     libraryService = req.app.get('libraryService');
   }
+  if (!accessibleFoldersService) {
+    accessibleFoldersService = req.app.get('accessibleFoldersService');
+  }
   next();
 });
+
+/**
+ * 列出「管理员在应用市场授权给本应用」的文件夹
+ * GET /api/library/accessible-folders?lang=zh-CN
+ *
+ * 必须放在 /:id 之类的动态路由之前，避免被当成素材库 id。
+ */
+router.get('/accessible-folders', asyncHandler(async (req, res) => {
+  const requested = typeof req.query.lang === 'string' ? req.query.lang.trim() : '';
+  // 语言决定飞牛语义路径的写法（「存储空间1/图片」还是「Storage 1/pictures」）：
+  // 前端没给就用系统语言，最后兜底 zh-CN。
+  const systemLanguage =
+    typeof process.env.TRIM_SYS_LANGUAGE === 'string' ? process.env.TRIM_SYS_LANGUAGE.trim() : '';
+  const language = (requested || systemLanguage || 'zh-CN').slice(0, 32);
+
+  const result = await accessibleFoldersService.list({ language });
+  res.json({ success: true, data: result });
+}));
 
 /**
  * 获取所有素材库

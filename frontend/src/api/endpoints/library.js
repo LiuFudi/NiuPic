@@ -19,6 +19,17 @@ export async function add(name, path) {
 }
 
 /**
+ * 获取「可访问的文件夹」清单
+ * —— 飞牛应用市场里管理员授权给 NiuPic 的目录，添加素材库时直接选，不用手输路径。
+ * @param {string} [lang] - 语义路径语言（如 zh-CN）。不传则由后端按飞牛系统语言决定，
+ *                          显示结果和飞牛文件管理器一致，推荐不传。
+ */
+export async function getAccessibleFolders(lang) {
+  const query = lang ? `?lang=${encodeURIComponent(lang)}` : '';
+  return api.get(`/library/accessible-folders${query}`);
+}
+
+/**
  * 更新素材库
  */
 export async function update(id, updates) {

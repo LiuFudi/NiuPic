@@ -5,6 +5,67 @@
 
 import { create } from 'zustand';
 
+// ==================== 排序 ====================
+// 排序是「跨层级」的偏好：在「全部图片」选好排序，点进任意子文件夹应该继续用同一个排序，
+// 而且刷新页面也要记得。所以它独立于 filters（filters 会在切文件夹时被 resetFilters 清掉），
+// 并且存在 localStorage 里。
+export const SORT_STORAGE_KEY = 'niupic_sort';
+
+export const DEFAULT_SORT = { field: 'created', order: 'desc', seed: 0 };
+
+/** 可选排序字段。field 必须与后端 constants.SORT.FIELDS 的键一致。 */
+export const SORT_OPTIONS = [
+  { field: 'created',    label: '创建时间',   hint: '文件创建 / 拍摄时间' },
+  { field: 'indexed',    label: '添加时间',   hint: '加入图库的时间，刚导入的老照片会排在最前' },
+  { field: 'modified',   label: '修改时间',   hint: '文件最后修改时间' },
+  { field: 'name',       label: '文件名',     hint: '自然排序，img2 会排在 img10 前面' },
+  { field: 'size',       label: '文件大小',   hint: '按字节数' },
+  { field: 'resolution', label: '分辨率',     hint: '按总像素（宽 × 高）' },
+  { field: 'width',      label: '宽度',       hint: '按图片宽度' },
+  { field: 'height',     label: '高度',       hint: '按图片高度' },
+  { field: 'aspect',     label: '宽高比',     hint: '宽幅 / 全景图排前面' },
+  { field: 'format',     label: '格式',       hint: 'jpg / png / webp …' },
+  { field: 'type',       label: '文件类型',   hint: '图片 / 视频 / 文档 …' },
+  { field: 'rating',     label: '评分',       hint: '按星级' },
+  { field: 'favorite',   label: '收藏',       hint: '收藏的排前面' },
+  { field: 'folder',     label: '所在文件夹', hint: '同一文件夹的图片聚在一起' },
+  { field: 'random',     label: '随机',       hint: '打乱顺序，再点一次重新洗牌' },
+];
+
+/** 这些字段「大 / 新」在前更符合直觉，切过去时默认用倒序 */
+export const SORT_DESC_BY_DEFAULT = [
+  'created', 'indexed', 'modified', 'size', 'resolution', 'width', 'height', 'rating', 'favorite'
+];
+
+export const defaultOrderFor = (field) =>
+  (SORT_DESC_BY_DEFAULT.includes(field) ? 'desc' : 'asc');
+
+/** 读回上次用的排序；解析失败就退回默认值 */
+export function loadSortPref() {
+  try {
+    const raw = localStorage.getItem(SORT_STORAGE_KEY);
+    if (!raw) return { ...DEFAULT_SORT };
+    const parsed = JSON.parse(raw);
+    if (!parsed || typeof parsed !== 'object') return { ...DEFAULT_SORT };
+    const known = SORT_OPTIONS.some((o) => o.field === parsed.field);
+    return {
+      field: known ? parsed.field : DEFAULT_SORT.field,
+      order: parsed.order === 'asc' || parsed.order === 'desc' ? parsed.order : DEFAULT_SORT.order,
+      seed: Number.isFinite(Number(parsed.seed)) ? Math.floor(Number(parsed.seed)) : 0,
+    };
+  } catch (e) {
+    return { ...DEFAULT_SORT };
+  }
+}
+
+function persistSort(sort) {
+  try {
+    localStorage.setItem(SORT_STORAGE_KEY, JSON.stringify(sort));
+  } catch (e) {
+    // 隐私模式等场景写不进去，忽略即可
+  }
+}
+
 export const useImageStore = create((set, get) => ({
   // 图片列表
   images: [],
@@ -27,6 +88,9 @@ export const useImageStore = create((set, get) => ({
     ratings: [],         // 评分筛选（多选）: [0, 1, 2, 3, 4, 5]
   },
   
+  // 排序偏好（跨层级、跨刷新保留，不随 filters 一起重置）
+  sort: loadSortPref(),
+
   // 原始图片列表（用于生成筛选选项，不受筛选影响）
   originalImages: [],
   
@@ -78,6 +142,38 @@ export const useImageStore = create((set, get) => ({
   
   setSelectedFolderItem: (folderItem) => set({ selectedFolderItem: folderItem }),
   
+  // 排序
+  /**
+   * 设置排序。传 { field } 切换字段（方向自动选该字段更符合直觉的默认值），
+   * 传 { order } 只改升降序。
+   */
+  setSort: (partial) => set((state) => {
+    const next = { ...state.sort, ...partial };
+    // 切换字段时没显式给方向，就套用该字段的默认方向
+    if (partial.field && partial.order === undefined) {
+      next.order = defaultOrderFor(partial.field);
+    }
+    // 选「随机」时换一个种子，等于重新洗牌
+    if (partial.field === 'random') {
+      next.seed = Math.floor(Math.random() * 2147483647);
+    }
+    persistSort(next);
+    return { sort: next };
+  }),
+
+  /** 重新洗牌（仅 sort.field === 'random' 时有意义） */
+  reshuffle: () => set((state) => {
+    const next = { ...state.sort, field: 'random', seed: Math.floor(Math.random() * 2147483647) };
+    persistSort(next);
+    return { sort: next };
+  }),
+
+  toggleSortOrder: () => set((state) => {
+    const next = { ...state.sort, order: state.sort.order === 'asc' ? 'desc' : 'asc' };
+    persistSort(next);
+    return { sort: next };
+  }),
+
   // 搜索和过滤
   setSearchKeywords: (keywords) => set({ searchKeywords: keywords }),
   

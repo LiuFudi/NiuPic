@@ -24,16 +24,24 @@ router.use((req, res, next) => {
 /**
  * 搜索图片
  * GET /api/image?libraryId=xxx&keywords=xxx&folder=xxx&offset=0&limit=100
+ *                  &sort=created|indexed|modified|name|size|resolution|width|height
+ *                        |aspect|format|type|rating|favorite|folder|random
+ *                  &order=asc|desc
+ *                  &seed=12345   （仅 sort=random 时用，决定洗牌结果）
  */
 router.get('/', 
   validatePagination,
   asyncHandler(async (req, res) => {
-    const { libraryId, keywords, folder, formats, offset, limit } = req.query;
+    const { libraryId, keywords, folder, formats, offset, limit, sort, order, seed } = req.query;
 
     const filters = {};
     if (keywords) filters.keywords = keywords;
     if (folder) filters.folder = folder;
     if (formats) filters.formats = formats.split(',');
+    // 排序（字段白名单校验在 ImageModel._buildOrderBy 里做）
+    if (sort) filters.sort = sort;
+    if (order) filters.order = order;
+    if (seed) filters.seed = seed;
 
     const pagination = (offset !== undefined && limit !== undefined)
       ? { offset: parseInt(offset), limit: parseInt(limit) }

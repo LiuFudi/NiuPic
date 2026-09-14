@@ -1,6 +1,6 @@
 {
   "name": "niupic",
-  "version": "2.0.6",
+  "version": "2.0.9",
   "private": true,
   "description": "牛图 NiuPic - 飞牛 fnOS 上的轻量、快速、稳定的图像素材检索浏览应用（基于 FlyPic 二次开发）",
   "keywords": [
@@ -35,7 +35,8 @@
     "dev:backend": "npm --workspace backend run dev",
     "dev": "npm run dev:backend",
     "build:fpk": "node scripts/build-fpk.js",
-    "test": "npm --workspace frontend run test"
+    "test": "npm --workspace frontend run test",
+    "test:backend": "npm --workspace backend run test"
   },
   "devDependencies": {
     "cross-env": "^7.0.3"

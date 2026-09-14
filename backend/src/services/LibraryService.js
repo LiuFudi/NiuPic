@@ -10,12 +10,13 @@ const { getNiuPicPath, getDatabasePath, getThumbnailsPath } = require('../config
 const logger = require('../utils/logger');
 
 class LibraryService {
-  constructor(configManager, dbPool, scanManager, lightweightWatcher, io) {
+  constructor(configManager, dbPool, scanManager, lightweightWatcher, io, accessibleFoldersService) {
     this.configManager = configManager;
     this.dbPool = dbPool;
     this.scanManager = scanManager;
     this.lightweightWatcher = lightweightWatcher;
     this.io = io;
+    this.accessibleFoldersService = accessibleFoldersService;
   }
 
   /**
@@ -49,6 +50,25 @@ class LibraryService {
       throw new ValidationError('Path does not exist', 'path');
     }
 
+    // 检查是否在飞牛授权范围内（可访问的文件夹是管理员在应用市场里授权的固定清单）
+    // 拿不到授权清单时返回 null，此时不拦截，避免误伤旧版飞牛或本地开发环境。
+    if (this.accessibleFoldersService) {
+      let authorized;
+      try {
+        authorized = await this.accessibleFoldersService.isPathAuthorized(normalizedPath);
+      } catch (error) {
+        logger.warn(`授权范围校验异常（忽略）: ${error.message}`);
+        authorized = null;
+      }
+      if (authorized === false) {
+        logger.warn(`路径未授权: ${normalizedPath}`);
+        throw new ValidationError(
+          '该文件夹尚未授权给 NiuPic。请在飞牛「应用中心 → NiuPic → 应用设置 → 可访问文件夹」里添加后重试。',
+          'permission'
+        );
+      }
+    }
+
     // 检查文件夹访问权限
     try {
       // 尝试读取目录
@@ -62,7 +82,7 @@ class LibraryService {
       } catch (writeError) {
         logger.warn(`无写入权限: ${normalizedPath}`);
         throw new ValidationError(
-          '无法访问该文件夹。请在飞牛 fnOS 的"数据共享"中将此文件夹添加到 NiuPic 应用的访问权限。',
+          '该文件夹没有写入权限（NiuPic 需要在其中建立 .niupic 索引目录）。请在飞牛「应用中心 → NiuPic → 应用设置 → 可访问文件夹」中确认已授权为读写。',
           'permission'
         );
       }
@@ -70,7 +90,7 @@ class LibraryService {
       if (readError.code === 'EACCES' || readError.code === 'EPERM') {
         logger.warn(`无访问权限: ${normalizedPath}`);
         throw new ValidationError(
-          '无法访问该文件夹。请在飞牛 fnOS 的"数据共享"中将此文件夹添加到 NiuPic 应用的访问权限。',
+          '无法访问该文件夹。请在飞牛「应用中心 → NiuPic → 应用设置 → 可访问文件夹」中授权该目录后重试。',
           'permission'
         );
       }

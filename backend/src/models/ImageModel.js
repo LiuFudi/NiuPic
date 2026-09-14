@@ -4,6 +4,8 @@
 
 const BaseModel = require('./BaseModel');
 const { mapImageForFrontend } = require('../utils/fieldMapper');
+const { constants } = require('../config');
+const { buildNameSortKey } = require('../../utils/nameSort');
 
 class ImageModel extends BaseModel {
   /**
@@ -65,8 +67,8 @@ class ImageModel extends BaseModel {
     const query = `
       INSERT OR REPLACE INTO images 
       (path, filename, folder, size, width, height, format, file_type,
-       created_at, modified_at, file_hash, thumbnail_path, thumbnail_size, indexed_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+       created_at, modified_at, file_hash, thumbnail_path, thumbnail_size, indexed_at, name_sort)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `;
     
     return this.execute(query, [
@@ -83,7 +85,8 @@ class ImageModel extends BaseModel {
       data.fileHash,
       data.thumbnailPath,
       data.thumbnailSize,
-      Date.now()
+      Date.now(),
+      buildNameSortKey(data.filename)
     ]);
   }
 
@@ -94,8 +97,8 @@ class ImageModel extends BaseModel {
     const query = `
       INSERT OR REPLACE INTO images 
       (path, filename, folder, size, width, height, format, file_type,
-       created_at, modified_at, file_hash, thumbnail_path, thumbnail_size, indexed_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+       created_at, modified_at, file_hash, thumbnail_path, thumbnail_size, indexed_at, name_sort)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `;
     
     return this.transaction(() => {
@@ -105,7 +108,8 @@ class ImageModel extends BaseModel {
           data.path, data.filename, data.folder, data.size,
           data.width, data.height, data.format, data.fileType || 'image',
           data.createdAt, data.modifiedAt, data.fileHash,
-          data.thumbnailPath, data.thumbnailSize, Date.now()
+          data.thumbnailPath, data.thumbnailSize, Date.now(),
+          buildNameSortKey(data.filename)
         );
       }
     });
@@ -158,6 +162,42 @@ class ImageModel extends BaseModel {
   }
 
   /**
+   * 构建 ORDER BY 子句
+   *
+   * 字段来自 constants.SORT.FIELDS 白名单，用户传什么都不会直接拼进 SQL。
+   * 白名单里 sql 是数组，多列时各自套用同一个方向。
+   * 末尾统一加 id 兜底 —— 排序值相同的记录顺序稳定，翻页才不会重复或漏图。
+   *
+   * @param {object} filters - 取 sort / order / seed 三个字段
+   * @returns {string} 形如 "ORDER BY created_at DESC, id ASC"
+   */
+  _buildOrderBy(filters = {}) {
+    const sortCfg = constants.SORT;
+    const fieldKey = Object.prototype.hasOwnProperty.call(sortCfg.FIELDS, filters.sort)
+      ? filters.sort
+      : sortCfg.DEFAULT_FIELD;
+    const field = sortCfg.FIELDS[fieldKey];
+
+    let order = String(filters.order || '').toLowerCase();
+    if (order !== 'asc' && order !== 'desc') {
+      order = sortCfg.DESC_BY_DEFAULT.includes(fieldKey) ? 'desc' : 'asc';
+    }
+    const dir = order === 'asc' ? 'ASC' : 'DESC';
+
+    // 随机：用 (id * 大质数 + seed) % 质数 做伪随机。
+    // 同一个 seed 下顺序稳定，所以翻页不会重复或漏图；换个 seed 就重新洗牌。
+    // seed 已强制转成整数，直接内联没有注入风险。
+    if (fieldKey === 'random') {
+      const n = Number(filters.seed);
+      const seed = Number.isFinite(n) ? Math.floor(n) : 0;
+      return `ORDER BY ((id * 2654435761 + ${seed}) % 2147483647) ${dir}, id ASC`;
+    }
+
+    const terms = field.sql.map((term) => `${term.trim()} ${dir}`);
+    return `ORDER BY ${terms.join(', ')}, id ASC`;
+  }
+
+  /**
    * 构建搜索查询
    */
   _buildSearchQuery(filters = {}, pagination = null) {
@@ -207,7 +247,7 @@ class ImageModel extends BaseModel {
     }
 
     // 排序
-    query += ' ORDER BY created_at DESC';
+    query += ` ${this._buildOrderBy(filters)}`;
 
     // 分页
     if (pagination) {

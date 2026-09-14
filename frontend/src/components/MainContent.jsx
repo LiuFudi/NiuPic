@@ -14,7 +14,7 @@ const logger = createLogger('MainContent');
 
 function MainContent() {
   const { currentLibraryId } = useLibraryStore();
-  const { searchKeywords, filters, selectedFolder, setImages, setOriginalImages, imageLoadingState, images } = useImageStore();
+  const { searchKeywords, filters, selectedFolder, setImages, setOriginalImages, imageLoadingState, images, sort } = useImageStore();
   const { scanProgress } = useScanStore();
 
   // 使用 ref 跟踪最新的请求上下文
@@ -71,6 +71,13 @@ function MainContent() {
       if (selectedFolder) params.folder = selectedFolder;
       if (searchKeywords) params.keywords = searchKeywords;
       if (filters.formats?.length > 0) params.formats = filters.formats.join(',');
+      // 排序交给后端做（字段白名单在 backend/src/config/constants.js 的 SORT.FIELDS）。
+      // 必须后端排：前端只拿到一页 100 张，本地排只能排这一页，翻页就乱了。
+      if (sort) {
+        params.sort = sort.field;
+        params.order = sort.order;
+        if (sort.field === 'random') params.seed = sort.seed;
+      }
 
       const response = await imageAPI.search(currentLibraryId, params, {
         signal: requestContext.signal
@@ -117,7 +124,7 @@ function MainContent() {
         currentRequestContextRef.current = null;
       }
     }
-  }, [currentLibraryId, searchKeywords, selectedFolder, setImages, setOriginalImages, cancelCurrentRequest]);
+  }, [currentLibraryId, searchKeywords, selectedFolder, setImages, setOriginalImages, cancelCurrentRequest, sort]);
 
   // 监听文件夹/搜索变化
   useEffect(() => {

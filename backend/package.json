@@ -5,7 +5,8 @@
   "main": "server.js",
   "scripts": {
     "dev": "cross-env PORT=15002 nodemon --expose-gc server.js",
-    "start": "node --expose-gc server.js"
+    "start": "node --expose-gc server.js",
+    "test": "node --test \"test/*.test.js\""
   },
   "dependencies": {
     "bcrypt": "^5.1.1",

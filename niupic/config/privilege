@@ -3,5 +3,8 @@
         "run-as": "package"
     },
     "username": "niupic",
-    "groupname": "niupic"
+    "groupname": "niupic",
+    "join-groups": [
+        "TrimApiUsers"
+    ]
 }

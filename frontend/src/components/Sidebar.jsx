@@ -1,5 +1,5 @@
 import { useState, useMemo, useEffect, useRef, useCallback } from 'react';
-import { Folder, Search, ChevronRight, ChevronDown, X, Trash2, ChevronsRight, ChevronsDown } from 'lucide-react';
+import { Folder, Search, ChevronRight, ChevronDown, X, Trash2, ChevronsRight, ChevronsDown, RefreshCw, Check } from 'lucide-react';
 import { useLibraryStore } from '../stores/useLibraryStore';
 import { useImageStore } from '../stores/useImageStore';
 import { useScanStore } from '../stores/useScanStore';
@@ -43,6 +43,14 @@ function Sidebar() {
   const [showAddLibrary, setShowAddLibrary] = useState(false);
   const [newLibraryName, setNewLibraryName] = useState('');
   const [newLibraryPath, setNewLibraryPath] = useState('');
+  // 添加素材库：可访问文件夹（飞牛应用市场授权的固定清单）
+  const [accessibleFolders, setAccessibleFolders] = useState([]);
+  const [selectedFolderPath, setSelectedFolderPath] = useState('');
+  const [foldersLoading, setFoldersLoading] = useState(false);
+  const [foldersError, setFoldersError] = useState('');
+  const [foldersMessage, setFoldersMessage] = useState('');
+  const [foldersManaged, setFoldersManaged] = useState(true);
+  const [manualPathMode, setManualPathMode] = useState(false);
   const [folderSearch, setFolderSearch] = useState('');
   const [localFolderSearch, setLocalFolderSearch] = useState('');  // 本地输入值
   const [expandedFolders, setExpandedFolders] = useState(new Set());
@@ -66,6 +74,69 @@ function Sidebar() {
   const librarySelectorRef = useRef(null);
   const folderNameInputRef = useRef(null);
   const newFolderInputRef = useRef(null);
+  // 用户是否手动改过素材库名称；没改过就让名称跟着选中的文件夹走
+  const libraryNameTouchedRef = useRef(false);
+
+  /** 关闭「添加素材库」表单并清空草稿 */
+  const closeAddLibraryForm = useCallback(() => {
+    setShowAddLibrary(false);
+    setNewLibraryName('');
+    setNewLibraryPath('');
+    setSelectedFolderPath('');
+    setManualPathMode(false);
+    libraryNameTouchedRef.current = false;
+  }, []);
+
+  /**
+   * 读取「可访问的文件夹」清单
+   * 飞牛的文件夹权限是管理员在应用市场里手动授权的固定清单，添加素材库时直接选。
+   */
+  const loadAccessibleFolders = useCallback(async () => {
+    setFoldersLoading(true);
+    setFoldersError('');
+    try {
+      // 不传浏览器语言：语义路径（「存储空间1/图片」）由后端按飞牛系统语言转换，
+      // 这样和用户在飞牛文件管理器里看到的名字一致。
+      const response = await libraryAPI.getAccessibleFolders();
+      const data = response?.data || response || {};
+      const list = Array.isArray(data.folders) ? data.folders : [];
+      setAccessibleFolders(list);
+      setFoldersMessage(typeof data.message === 'string' ? data.message : '');
+      setFoldersManaged(data.canManage !== false);
+
+      const first = list.find((item) => item.exists && item.readable && item.writable && !item.alreadyAdded);
+      setSelectedFolderPath(first ? first.path : '');
+      if (first && !libraryNameTouchedRef.current) {
+        setNewLibraryName(first.name);
+      }
+      logger.data(`可访问文件夹: ${list.length} 个`);
+      return list;
+    } catch (error) {
+      logger.warn('读取可访问文件夹失败:', error.message);
+      setAccessibleFolders([]);
+      setFoldersMessage('');
+      setFoldersError(error.message || '未知错误');
+      return [];
+    } finally {
+      setFoldersLoading(false);
+    }
+  }, []);
+
+  // 打开「添加素材库」表单时读取授权目录
+  useEffect(() => {
+    if (showAddLibrary) {
+      loadAccessibleFolders();
+    }
+  }, [showAddLibrary, loadAccessibleFolders]);
+  /**
+   * 选中一个可访问文件夹：名称没被手动改过就跟着文件夹名走
+   */
+  const handleSelectAccessibleFolder = (folder) => {
+    setSelectedFolderPath(folder.path);
+    if (!libraryNameTouchedRef.current) {
+      setNewLibraryName(folder.name);
+    }
+  };
 
   // 文件夹搜索防抖（300ms）
   const handleFolderSearchChange = (value) => {
@@ -837,8 +908,11 @@ function Sidebar() {
       return;
     }
 
-    if (!newLibraryPath.trim()) {
-      alert('请输入文件夹路径');
+    // 优先用「可访问文件夹」里选中的那个，手动模式下才用输入框
+    const targetPath = (manualPathMode ? newLibraryPath : selectedFolderPath || newLibraryPath).trim();
+
+    if (!targetPath) {
+      alert(manualPathMode ? '请输入文件夹路径' : '请选择要添加的可访问文件夹');
       return;
     }
 
@@ -847,20 +921,18 @@ function Sidebar() {
     try {
       // 1. 添加素材库
       logger.data('添加素材库...');
-      const response = await libraryAPI.add(newLibraryName.trim(), newLibraryPath.trim());
+      const response = await libraryAPI.add(newLibraryName.trim(), targetPath);
       const newLibId = response.id;
       const hasExistingIndex = response.hasExistingIndex;
 
       addLibrary({
         id: newLibId,
         name: newLibraryName.trim(),
-        path: newLibraryPath.trim()
+        path: targetPath
       });
 
-      // 2. 关闭表单
-      setNewLibraryName('');
-      setNewLibraryPath('');
-      setShowAddLibrary(false);
+      // 2. 关闭表单并清空草稿
+      closeAddLibraryForm();
       setIsAdding(false); // 立即释放按钮
 
       // 3. 切换到新素材库
@@ -925,14 +997,15 @@ function Sidebar() {
       }
       
       // 特殊处理权限错误
-      if (errorMessage.includes('无法访问') || errorMessage.includes('权限') || errorMessage.includes('数据共享')) {
+      if (errorMessage.includes('无法访问') || errorMessage.includes('权限') || errorMessage.includes('授权')) {
         alert(
           '⚠️ 文件夹权限不足\n\n' +
           errorMessage + '\n\n' +
           '操作步骤：\n' +
-          '1. 应用中心找到 NiuPic 应用\n' +
-          '2. 点击 应用设置\n' +
-          '3. 将该文件夹添加到 NiuPic 应用的读写权限'
+          '1. 飞牛「应用中心」找到 NiuPic 应用\n' +
+          '2. 点击「应用设置」\n' +
+          '3. 在「可访问文件夹」里添加素材库目录（读写）\n' +
+          '4. 回到这里点刷新，重新选择'
         );
       } else {
         alert('添加素材库失败: ' + errorMessage);
@@ -1524,7 +1597,7 @@ function Sidebar() {
             <div className="flex items-center justify-between mb-2">
               <h3 className="text-sm font-medium text-gray-700 dark:text-gray-300">添加素材库</h3>
               <button
-                onClick={() => setShowAddLibrary(false)}
+                onClick={closeAddLibraryForm}
                 className="p-1 rounded hover:bg-gray-200 dark:hover:bg-gray-600"
               >
                 <X className="w-4 h-4 text-gray-500" />
@@ -1535,22 +1608,140 @@ function Sidebar() {
                 type="text"
                 placeholder="素材库名称"
                 value={newLibraryName}
-                onChange={(e) => setNewLibraryName(e.target.value)}
+                onChange={(e) => {
+                  libraryNameTouchedRef.current = true;
+                  setNewLibraryName(e.target.value);
+                }}
                 onKeyDown={(e) => e.key === 'Enter' && handleAddLibrary()}
                 autoFocus
                 className="w-full px-2 py-1.5 text-sm border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100"
               />
-              <input
-                type="text"
-                placeholder="文件夹路径（例如：C:\Users\Pictures）"
-                value={newLibraryPath}
-                onChange={(e) => setNewLibraryPath(e.target.value)}
-                onKeyDown={(e) => e.key === 'Enter' && handleAddLibrary()}
-                className="w-full px-2 py-1.5 text-sm border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100"
-              />
+
+              {/* 文件夹：列出飞牛已授权的「可访问文件夹」，默认不手输路径 */}
+              {!manualPathMode && (
+                <div>
+                  <div className="flex items-center justify-between mb-1">
+                    <span className="text-xs text-gray-500 dark:text-gray-400">
+                      可访问的文件夹
+                      {accessibleFolders.length > 0 && `（${accessibleFolders.length}）`}
+                    </span>
+                    <button
+                      type="button"
+                      onClick={loadAccessibleFolders}
+                      disabled={foldersLoading}
+                      title="重新读取授权目录"
+                      className="p-1 rounded hover:bg-gray-200 dark:hover:bg-gray-600 disabled:opacity-50"
+                    >
+                      <RefreshCw className={`w-3.5 h-3.5 text-gray-500 ${foldersLoading ? 'animate-spin' : ''}`} />
+                    </button>
+                  </div>
+
+                  {foldersLoading ? (
+                    <div className="px-2 py-4 text-center text-xs text-gray-500 dark:text-gray-400 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-800">
+                      正在读取授权目录…
+                    </div>
+                  ) : accessibleFolders.length === 0 ? (
+                    <div className="px-2 py-2 text-xs text-gray-600 dark:text-gray-300 border border-amber-300 dark:border-amber-700 rounded bg-amber-50 dark:bg-amber-900/30">
+                      <div className="font-medium mb-1 text-amber-800 dark:text-amber-200">还没有可用的文件夹</div>
+                      <div className="leading-relaxed">
+                        {foldersError ? `读取失败：${foldersError}` : foldersMessage}
+                      </div>
+                      <div className="mt-1 leading-relaxed">
+                        路径：飞牛「应用中心 → NiuPic → 应用设置 → 可访问文件夹」
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="max-h-52 overflow-y-auto border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-800 divide-y divide-gray-100 dark:divide-gray-700">
+                      {accessibleFolders.map((folder) => {
+                        const usable = folder.exists && folder.readable && folder.writable && !folder.alreadyAdded;
+                        const selected = selectedFolderPath === folder.path;
+                        return (
+                          <button
+                            type="button"
+                            key={folder.path}
+                            onClick={() => handleSelectAccessibleFolder(folder)}
+                            disabled={!usable}
+                            title={folder.path}
+                            className={`w-full flex items-start gap-2 px-2 py-1.5 text-left transition-colors ${
+                              selected ? 'bg-blue-50 dark:bg-blue-900/40' : ''
+                            } ${
+                              usable
+                                ? 'cursor-pointer hover:bg-gray-100 dark:hover:bg-gray-700'
+                                : 'cursor-not-allowed opacity-60'
+                            }`}
+                          >
+                            <Folder className="w-3.5 h-3.5 mt-0.5 flex-shrink-0 text-blue-500 dark:text-blue-400" />
+                            <span className="min-w-0 flex-1">
+                              <span className="block truncate text-sm text-gray-900 dark:text-gray-100">
+                                {folder.displayPath}
+                              </span>
+                              <span className="block truncate text-[11px] text-gray-400 dark:text-gray-500">
+                                {folder.path}
+                              </span>
+                              {(!folder.exists || !folder.readable || folder.alreadyAdded || folder.hasExistingIndex || folder.source !== 'authorized') && (
+                                <span className="mt-0.5 flex flex-wrap gap-1">
+                                  {!folder.exists && (
+                                    <span className="px-1 rounded bg-red-100 dark:bg-red-900/50 text-[10px] text-red-700 dark:text-red-300">路径不存在</span>
+                                  )}
+                                  {folder.exists && !folder.readable && (
+                                    <span className="px-1 rounded bg-red-100 dark:bg-red-900/50 text-[10px] text-red-700 dark:text-red-300">无读取权限</span>
+                                  )}
+                                  {folder.exists && folder.readable && !folder.writable && (
+                                    <span className="px-1 rounded bg-amber-100 dark:bg-amber-900/50 text-[10px] text-amber-700 dark:text-amber-300">只读</span>
+                                  )}
+                                  {folder.alreadyAdded && (
+                                    <span className="px-1 rounded bg-gray-200 dark:bg-gray-600 text-[10px] text-gray-600 dark:text-gray-300">已添加</span>
+                                  )}
+                                  {folder.hasExistingIndex && !folder.alreadyAdded && (
+                                    <span className="px-1 rounded bg-emerald-100 dark:bg-emerald-900/50 text-[10px] text-emerald-700 dark:text-emerald-300">已有索引</span>
+                                  )}
+                                  {folder.source === 'shared' && (
+                                    <span className="px-1 rounded bg-gray-200 dark:bg-gray-600 text-[10px] text-gray-600 dark:text-gray-300">应用共享目录</span>
+                                  )}
+                                  {folder.source === 'scanned' && (
+                                    <span className="px-1 rounded bg-gray-200 dark:bg-gray-600 text-[10px] text-gray-600 dark:text-gray-300">自动探测</span>
+                                  )}
+                                </span>
+                              )}
+                            </span>
+                            {selected && <Check className="w-4 h-4 mt-0.5 flex-shrink-0 text-blue-500 dark:text-blue-400" />}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  )}
+
+                  {!foldersLoading && !foldersManaged && accessibleFolders.length > 0 && (
+                    <div className="mt-1 text-[11px] leading-relaxed text-amber-700 dark:text-amber-300">
+                      {foldersMessage || '未能读取飞牛的授权目录清单，列表可能不完整。'}
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* 兜底：手动输入路径（授权列表读不到、或需要添加子目录时用） */}
+              {manualPathMode && (
+                <input
+                  type="text"
+                  placeholder="文件夹路径（例如：/vol1/1000/图片库）"
+                  value={newLibraryPath}
+                  onChange={(e) => setNewLibraryPath(e.target.value)}
+                  onKeyDown={(e) => e.key === 'Enter' && handleAddLibrary()}
+                  className="w-full px-2 py-1.5 text-sm border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100"
+                />
+              )}
+
+              <button
+                type="button"
+                onClick={() => setManualPathMode((value) => !value)}
+                className="text-[11px] text-gray-500 dark:text-gray-400 hover:text-blue-500 dark:hover:text-blue-400 underline"
+              >
+                {manualPathMode ? '从可访问文件夹中选择' : '手动输入路径'}
+              </button>
+
               <div className="flex gap-2">
                 <button
-                  onClick={() => setShowAddLibrary(false)}
+                  onClick={closeAddLibraryForm}
                   className="flex-1 px-3 py-1.5 border border-gray-300 dark:border-gray-600 rounded text-sm hover:bg-gray-100 dark:hover:bg-gray-600 text-gray-700 dark:text-gray-300"
                 >
                   取消

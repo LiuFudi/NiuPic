@@ -25,6 +25,13 @@ export TRIM_DATA_SHARE_PATHS
 export DATA_DIR="${DATA_DIR}"
 export PORT="${APP_PORT}"
 
+# 可访问文件夹（管理员在应用市场授权的目录）：
+#   TRIM_DATA_ACCESSIBLE_PATHS —— 飞牛注入的授权目录清单（: 分隔）
+#   TRIM_API_TOKEN             —— 调飞牛开放 API 查授权清单用（不落盘、不打日志）
+export TRIM_DATA_ACCESSIBLE_PATHS
+export TRIM_API_TOKEN
+export TRIM_APPNAME="${TRIM_APPNAME:-niupic}"
+
 # 启动命令
 CMD="node ${TRIM_APPDEST}/server/server.js"
 

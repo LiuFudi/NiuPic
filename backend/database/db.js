@@ -1,5 +1,6 @@
 const Database = require('better-sqlite3');
 const path = require('path');
+const { buildNameSortKey } = require('../utils/nameSort');
 const fs = require('fs');
 const { constants } = require('../src/config');
 
@@ -28,6 +29,7 @@ class LibraryDatabase {
     this.db.pragma('mmap_size = 268435456'); // 256MB 内存映射
     
     this.initTables();
+    this.migrateNameSort();
     
     // 启动 WAL 定期 checkpoint（使用配置的间隔）
     const checkpointInterval = constants.MEMORY.WAL_CHECKPOINT_INTERVAL_MS || 600000;
@@ -83,6 +85,13 @@ class LibraryDatabase {
       // 列已存在，忽略错误
     }
 
+    // 添加 name_sort 列（自然排序键，见 utils/nameSort.js）
+    try {
+      this.db.exec(`ALTER TABLE images ADD COLUMN name_sort TEXT`);
+    } catch (e) {
+      // 列已存在，忽略错误
+    }
+
     // 添加 tags 列（如果不存在）
     try {
       this.db.exec(`ALTER TABLE images ADD COLUMN tags TEXT DEFAULT ''`);
@@ -115,6 +124,8 @@ class LibraryDatabase {
       -- 评分和收藏索引：优化筛选查询
       CREATE INDEX IF NOT EXISTS idx_rating ON images(rating DESC);
       CREATE INDEX IF NOT EXISTS idx_favorite ON images(favorite DESC);
+      -- 自然排序键索引：让「按文件名排序」走索引而不是全表排序
+      CREATE INDEX IF NOT EXISTS idx_name_sort ON images(name_sort);
     `);
 
     // Metadata table for tracking database modifications
@@ -136,6 +147,34 @@ class LibraryDatabase {
   /**
    * 更新数据库最后修改时间
    */
+  /**
+   * 给历史数据补 name_sort（自然排序键）
+   *
+   * 只在第一次跑（用 metadata 表里的标记判断），此后每次启动只多一次主键查询。
+   * 大库首次会遍历一遍，用事务批量写，几十万行也就几秒。
+   */
+  migrateNameSort() {
+    try {
+      const done = this.db.prepare(`SELECT value FROM metadata WHERE key = 'name_sort_migrated'`).get();
+      if (done) return;
+
+      const rows = this.db.prepare('SELECT id, filename FROM images WHERE name_sort IS NULL').all();
+      if (rows.length > 0) {
+        const upd = this.db.prepare('UPDATE images SET name_sort = ? WHERE id = ?');
+        const run = this.db.transaction((list) => {
+          for (const row of list) upd.run(buildNameSortKey(row.filename), row.id);
+        });
+        run(rows);
+        console.log(`[DB] 已为 ${rows.length} 条记录生成文件名排序键`);
+      }
+
+      this.db.prepare(`INSERT OR REPLACE INTO metadata (key, value, updated_at) VALUES ('name_sort_migrated', '1', ?)`)
+        .run(Date.now());
+    } catch (error) {
+      console.warn('[DB] 生成文件名排序键失败（不影响使用）:', error.message);
+    }
+  }
+
   updateLastModified() {
     const now = Date.now();
     this.db.prepare('INSERT OR REPLACE INTO metadata (key, value, updated_at) VALUES (?, ?, ?)').run('last_modified', now.toString(), now);
@@ -168,8 +207,8 @@ class LibraryDatabase {
   insertImage(imageData) {
     const stmt = this.db.prepare(`
       INSERT OR REPLACE INTO images 
-      (path, filename, folder, size, width, height, format, file_type, created_at, modified_at, file_hash, thumbnail_path, thumbnail_size, indexed_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      (path, filename, folder, size, width, height, format, file_type, created_at, modified_at, file_hash, thumbnail_path, thumbnail_size, indexed_at, name_sort)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `);
     const result = stmt.run(
       imageData.path,
@@ -185,7 +224,8 @@ class LibraryDatabase {
       imageData.file_hash,
       imageData.thumbnail_path,
       imageData.thumbnail_size,
-      Date.now()
+      Date.now(),
+      buildNameSortKey(imageData.filename)
     );
     // 更新数据库修改时间
     this.updateLastModified();

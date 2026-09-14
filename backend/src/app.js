@@ -15,6 +15,7 @@ const ImageService = require('./services/ImageService');
 const ScanService = require('./services/ScanService');
 const FileService = require('./services/FileService');
 const AuthService = require('./services/AuthService');
+const AccessibleFoldersService = require('./services/AccessibleFoldersService');
 
 /**
  * 创建 Express 应用
@@ -38,12 +39,18 @@ function createApp(dependencies) {
   // 初始化服务
   const authService = new AuthService(configManager);
 
+  // 可访问文件夹（飞牛授权目录）清单
+  const accessibleFoldersService = new AccessibleFoldersService({
+    getLibraries: () => (configManager.load().libraries || [])
+  });
+
   const libraryService = new LibraryService(
     configManager,
     dbPool,
     scanManager,
     lightweightWatcher,
-    io
+    io,
+    accessibleFoldersService
   );
 
   const imageService = new ImageService(
@@ -66,6 +73,7 @@ function createApp(dependencies) {
   app.set('dbPool', dbPool);
   app.set('authService', authService);
   app.set('libraryService', libraryService);
+  app.set('accessibleFoldersService', accessibleFoldersService);
   app.set('imageService', imageService);
   app.set('scanService', scanService);
   app.set('fileService', fileService);

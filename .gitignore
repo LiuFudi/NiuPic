@@ -65,3 +65,6 @@ test-library/
 
 # 根目录放的 logo 原图（相同内容已收录为 design/logo.png）
 /牛图.png
+
+# 打包用的压缩包（发布时走 GitHub Release，不进仓库）
+/*.zip

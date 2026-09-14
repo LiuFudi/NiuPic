@@ -1,5 +1,5 @@
 appname               = niupic
-version               = 2.0.6
+version               = 2.0.9
 display_name          = NiuPic
 desc                  = 牛图 - 为飞牛 fnOS 设计的轻量、快速、稳定的图像素材检索浏览应用，支持数十万级别图片流畅浏览，非侵入式设计，100% 开源免费。本应用基于原作者 ZangXincz 的 FlyPic 二次开发，由 LiuFudi 接手维护
 platform              = x86
@@ -15,4 +15,5 @@ service_port          = 15002
 install_dep_apps      = nodejs_v22
 os_min_version        = 0.9.27
 ctl_stop              = true
-changelog             = 牛图 NiuPic 2.0.6 —— 由 LiuFudi 接手维护（原作者 ZangXincz 的 FlyPic 已归档）。重命名为牛图/NiuPic；新增双击图片全屏查看器（左右切换、滚轮缩放、旋转、幻灯片、文件信息）；首页直接展示素材库全部层级的图片；修复图片超过 50 张后双击无法打开全屏；修复分辨率显示为缩略图尺寸导致缩放比例错误；修复「全部图片」误进入素材库概览；修复打包时 bcrypt 原生模块路径错误导致应用无法启动；修复 LibraryService 缺少 logger 导入导致添加图库报 500
+disable_authorization_path = false
+changelog             = 牛图 NiuPic 2.0.9 —— 新增：添加素材库时直接列出「可访问文件夹」（管理员在飞牛应用市场授权的目录），不再需要手输文件夹路径；未授权路径会被后端拒绝并给出操作指引。使用前请在「应用中心 → NiuPic → 应用设置 → 可访问文件夹」里授权素材库目录（读写）。2.0.8 —— 由 LiuFudi 接手维护（原作者 ZangXincz 的 FlyPic 已归档）：新增图片排序（15 个排序字段、文件名自然排序）、双击全屏查看器；修复顶栏排序面板被裁切、超过 50 张后双击失效、分辨率误用缩略图尺寸、「全部图片」看不到照片、打包后无法启动、添加图库报 500

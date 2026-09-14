@@ -88,6 +88,36 @@ module.exports = {
     PLACEHOLDER_HEIGHT: 480              // 占位图高度
   },
   
+  // 排序配置
+  // key 是给接口用的稳定标识，改动会让前端已保存的排序偏好失效，别随便改。
+  // sql 里如果有多列，会各自套用正/倒序（例如 folder, name_sort）。
+  SORT: {
+    DEFAULT_FIELD: 'created',
+    DEFAULT_ORDER: 'desc',
+    // sql 是**数组**：多列就写多个（例如 folder 要让同一文件夹的图片聚在一起，
+    // 文件夹内再按文件名自然序）。千万不要用逗号拼一个字符串 ——
+    // 表达式内部本来就可能带逗号（NULLIF(height, 0)），一拆就坏。
+    FIELDS: {
+      created:    { label: '创建时间',   sql: ['created_at'] },
+      indexed:    { label: '添加时间',   sql: ['indexed_at'] },
+      modified:   { label: '修改时间',   sql: ['modified_at'] },
+      name:       { label: '文件名',     sql: ['name_sort'] },
+      size:       { label: '文件大小',   sql: ['size'] },
+      resolution: { label: '分辨率',     sql: ['(width * height)'] },
+      width:      { label: '宽度',       sql: ['width'] },
+      height:     { label: '高度',       sql: ['height'] },
+      aspect:     { label: '宽高比',     sql: ['(CAST(width AS REAL) / NULLIF(height, 0))'] },
+      format:     { label: '格式',       sql: ['format'] },
+      type:       { label: '文件类型',   sql: ['file_type'] },
+      rating:     { label: '评分',       sql: ['rating'] },
+      favorite:   { label: '收藏',       sql: ['favorite'] },
+      folder:     { label: '所在文件夹', sql: ['folder', 'name_sort'] },
+      random:     { label: '随机',       sql: null }   // 特殊处理，见 ImageModel
+    },
+    // 这些字段默认「大的 / 新的在前」更符合直觉，其余默认升序
+    DESC_BY_DEFAULT: ['created', 'indexed', 'modified', 'size', 'resolution', 'width', 'height', 'rating', 'favorite']
+  },
+
   // 文件监控配置
   FILE_WATCHER: {
     POLL_INTERVAL_MS: 5000,              // 轮询间隔：5秒

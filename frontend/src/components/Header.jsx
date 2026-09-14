@@ -1,7 +1,7 @@
 import { useState, useEffect, useMemo, useRef } from 'react';
-import { Sun, Moon, Search, Filter, Sliders, RefreshCw, Star } from 'lucide-react';
+import { Sun, Moon, Search, Filter, Sliders, RefreshCw, Star, ArrowUpDown, ArrowUp, ArrowDown, Shuffle } from 'lucide-react';
 import { useLibraryStore } from '../stores/useLibraryStore';
-import { useImageStore } from '../stores/useImageStore';
+import { useImageStore, SORT_OPTIONS } from '../stores/useImageStore';
 import { useUIStore } from '../stores/useUIStore';
 import { useScanStore } from '../stores/useScanStore';
 import { useTheme } from '../hooks/useTheme';
@@ -12,11 +12,16 @@ const logger = createLogger('Header');
 
 function Header() {
   const { currentLibraryId } = useLibraryStore();
-  const { searchKeywords, originalImages, selectedFolder, setSearchKeywords, filters, setFilters, resetFilters } = useImageStore();
+  const {
+    searchKeywords, originalImages, selectedFolder, setSearchKeywords,
+    filters, setFilters, resetFilters,
+    sort, setSort, toggleSortOrder, reshuffle,
+  } = useImageStore();
   const { thumbnailHeight, setThumbnailHeight, mobileView } = useUIStore();
   const { theme, toggleTheme } = useTheme();
   
   const [showFilters, setShowFilters] = useState(false);
+  const [showSort, setShowSort] = useState(false);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [isMobile, setIsMobile] = useState(false);
   const [showMobileSettings, setShowMobileSettings] = useState(false);
@@ -251,6 +256,24 @@ function Header() {
     setFilters({ ratings: newRatings });
   };
 
+  // ==================== 排序 ====================
+  const currentSortOption = SORT_OPTIONS.find((o) => o.field === sort.field) || SORT_OPTIONS[0];
+  const sortOrderLabel = sort.order === 'asc' ? '升序' : '降序';
+
+  /**
+   * 点排序选项：
+   *   点没选中的 → 切过去（方向用该字段更符合直觉的默认值）
+   *   点已选中的 → 再点一次换方向；「随机」则是重新洗牌
+   */
+  const handlePickSort = (field) => {
+    if (field === sort.field) {
+      if (field === 'random') reshuffle();
+      else toggleSortOrder();
+      return;
+    }
+    setSort({ field });
+  };
+
   // 清除筛选
   const clearFilters = () => {
     setFilters({ formats: [], sizes: [], orientations: [], ratings: [] });
@@ -300,7 +323,7 @@ function Header() {
     const showSearch = mobileView !== 'sidebar';
     
     return (
-      <header className="border-b border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800">
+      <header className="flex-shrink-0 border-b border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800">
         {/* 顶部栏 */}
         <div className="h-14 flex items-center justify-between px-4">
           <h1 className="text-lg font-bold text-gray-900 dark:text-white">牛图 NiuPic</h1>
@@ -349,7 +372,7 @@ function Header() {
                 />
               </div>
               <button
-                onClick={() => setShowFilters(!showFilters)}
+                onClick={() => { setShowFilters(!showFilters); setShowSort(false); }}
                 className={`p-2 border rounded-lg ${
                   selectedFormats.length > 0 || selectedSizes.length > 0 || selectedOrientations.length > 0 || selectedRatings.length > 0
                     ? 'border-blue-500 bg-blue-50 dark:bg-blue-500/20'
@@ -362,9 +385,23 @@ function Header() {
                     : 'text-gray-600 dark:text-gray-400'
                 }`} />
               </button>
+              <button
+                onClick={() => { setShowSort(!showSort); setShowFilters(false); }}
+                className={`p-2 border rounded-lg ${
+                  showSort ? 'border-blue-500 bg-blue-50 dark:bg-blue-500/20' : 'border-gray-300 dark:border-gray-600'
+                }`}
+                title={`排序：${currentSortOption.label}（${sortOrderLabel}）`}
+              >
+                <ArrowUpDown className={`w-5 h-5 ${
+                  showSort ? 'text-blue-600 dark:text-blue-300' : 'text-gray-600 dark:text-gray-400'
+                }`} />
+              </button>
             </div>
           </div>
         )}
+
+        {/* 排序面板（移动端） */}
+        {showSearch && showSort && renderSortPanel('px-4 pb-3')}
         
         {/* 移动端设置面板 */}
         {showMobileSettings && (
@@ -497,9 +534,64 @@ function Header() {
     );
   }
 
+  /** 排序面板：桌面端和移动端共用同一段 */
+  const renderSortPanel = (wrapperClass) => (
+    <div className={wrapperClass}>
+      <div className="p-4 bg-gray-50 dark:bg-gray-700 rounded-lg">
+        <div className="flex items-center justify-between mb-3">
+          <div className="text-sm font-medium text-gray-700 dark:text-gray-300">
+            排序方式
+            <span className="ml-2 text-xs font-normal text-gray-500 dark:text-gray-400">
+              {currentSortOption.hint}
+            </span>
+          </div>
+          <button
+            onClick={toggleSortOrder}
+            className="flex items-center gap-1 text-xs text-blue-500 hover:text-blue-600"
+            title="切换升序 / 降序"
+          >
+            {sort.order === 'asc'
+              ? <><ArrowUp className="w-3.5 h-3.5" />{sortOrderLabel}</>
+              : <><ArrowDown className="w-3.5 h-3.5" />{sortOrderLabel}</>}
+          </button>
+        </div>
+
+        <div className="flex flex-wrap gap-2">
+          {SORT_OPTIONS.map((option) => {
+            const active = option.field === sort.field;
+            return (
+              <button
+                key={option.field}
+                onClick={() => handlePickSort(option.field)}
+                title={option.hint}
+                className={`flex items-center gap-1 px-3 py-1 text-xs rounded-full transition-colors ${
+                  active
+                    ? 'bg-blue-500 text-white'
+                    : 'bg-gray-100 dark:bg-gray-600 text-gray-700 dark:text-gray-200 hover:bg-gray-200 dark:hover:bg-gray-500'
+                }`}
+              >
+                {option.field === 'random' && <Shuffle className="w-3 h-3" />}
+                {option.label}
+                {active && option.field !== 'random' && (
+                  sort.order === 'asc'
+                    ? <ArrowUp className="w-3 h-3" />
+                    : <ArrowDown className="w-3 h-3" />
+                )}
+              </button>
+            );
+          })}
+        </div>
+
+        <div className="mt-3 text-xs text-gray-400 dark:text-gray-500">
+          排序对所有层级生效：首页、全部图片、任意子文件夹都用同一套排序，切换时会记住。
+        </div>
+      </div>
+    </div>
+  );
+
   // 桌面端布局
   return (
-    <header className="border-b border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800">
+    <header className="flex-shrink-0 border-b border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800">
       <div className="h-14 flex items-center justify-between px-6">
         <div className="flex-shrink-0">
           <h1 className="text-xl font-bold text-gray-900 dark:text-white">牛图 NiuPic</h1>
@@ -519,7 +611,7 @@ function Header() {
             />
           </div>
           <button
-            onClick={() => setShowFilters(!showFilters)}
+            onClick={() => { setShowFilters(!showFilters); setShowSort(false); }}
             className={`relative p-2 border rounded-lg transition-colors ${
               selectedFormats.length > 0 || selectedSizes.length > 0 || selectedOrientations.length > 0 || selectedRatings.length > 0
                 ? 'border-blue-500 dark:border-blue-400 bg-blue-50 dark:bg-blue-500/20 hover:bg-blue-100 dark:hover:bg-blue-500/30'
@@ -542,6 +634,25 @@ function Header() {
                 style={{ backgroundColor: '#3b82f6' }}
               ></span>
             )}
+          </button>
+
+          {/* 排序 */}
+          <button
+            onClick={() => { setShowSort(!showSort); setShowFilters(false); }}
+            className={`flex items-center gap-2 px-3 py-2 border rounded-lg transition-colors whitespace-nowrap ${
+              showSort
+                ? 'border-blue-500 dark:border-blue-400 bg-blue-50 dark:bg-blue-500/20'
+                : 'border-gray-300 dark:border-gray-600 hover:bg-gray-100 dark:hover:bg-gray-700'
+            }`}
+            title={`排序：${currentSortOption.label}（${sortOrderLabel}）`}
+          >
+            <ArrowUpDown className={`w-5 h-5 ${
+              showSort ? 'text-blue-600 dark:text-blue-300' : 'text-gray-600 dark:text-gray-400'
+            }`} />
+            <span className="text-sm text-gray-700 dark:text-gray-200">{currentSortOption.label}</span>
+            {sort.order === 'asc'
+              ? <ArrowUp className="w-3.5 h-3.5 text-gray-500" />
+              : <ArrowDown className="w-3.5 h-3.5 text-gray-500" />}
           </button>
         </div>
 
@@ -580,7 +691,10 @@ function Header() {
           </button>
         </div>
       </div>
-      
+
+      {/* 排序面板（桌面端）—— 必须放在 h-14 工具栏之外，否则会被固定高度裁掉 */}
+      {showSort && renderSortPanel('px-6 pb-3')}
+
       {/* 筛选面板 */}
       {showFilters && (
         <div className="px-6 pb-3">
