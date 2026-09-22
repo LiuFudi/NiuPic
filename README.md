@@ -13,8 +13,12 @@
 
 **牛图 NiuPic 是 [FlyPic](https://github.com/ZangXincz/FlyPic) 的延续，不是从零开始的新项目。**
 
-- **原作者：[ZangXincz](https://github.com/ZangXincz)** —— FlyPic 的作者。原项目已经归档，不再维护。
-- **接手维护：[LiuFudi](https://github.com/LiuFudi)** —— 自 2.0.x 起接手开发与维护。
+- **原作者：[ZangXincz](https://github.com/ZangXincz)** —— FlyPic 的作者。
+  公开仓库的最后一个版本是 **1.2.0**（2025-12），2026-03 作者宣布停更（"因某些原因，本人不再使用飞牛"），
+  仓库随后归档。
+- **后续维护：[LiuFudi](https://github.com/LiuFudi)** —— **自 FlyPic 1.3.0 起继续维护**：
+  1.3.0 是在 1.2.0 基础上做的（新增全屏查看器、重做打包脚本等），仍沿用 FlyPic 的名字；
+  之后更名 **牛图 NiuPic**，版本从 2.0.x 一路走到现在。
 
 FlyPic 的作者把这样一个完成度很高、并且真正解决「几十万张图怎么快速找图」这个实际问题的项目开源了出来，
 牛图是在他的成果上继续往前走。原始的架构设计、扫描与索引方案、缩略图与内存控制策略都来自 FlyPic，
