@@ -6,10 +6,11 @@
 // See the LICENSE file for the full text.
 
 import { useState, useEffect, useMemo, useRef } from 'react';
-import { Sun, Moon, Search, Filter, Sliders, RefreshCw, ArrowUpDown, ArrowUp, ArrowDown, Palette } from 'lucide-react';
+import { Sun, Moon, Search, Filter, Sliders, RefreshCw, ArrowUpDown, ArrowUp, ArrowDown, Palette, Heart } from 'lucide-react';
 import { useLibraryStore } from '../stores/useLibraryStore';
 import { useImageStore, SORT_OPTIONS } from '../stores/useImageStore';
 import { useUIStore } from '../stores/useUIStore';
+import DonateDialog, { DonateButton } from './DonateDialog';
 import { useScanStore } from '../stores/useScanStore';
 import { useTheme } from '../hooks/useTheme';
 import ThemeColorPicker from './ThemeColorPicker';
@@ -42,6 +43,8 @@ function Header() {
   const [isMobile, setIsMobile] = useState(false);
   const [showMobileSettings, setShowMobileSettings] = useState(false);
   const [localSearchValue, setLocalSearchValue] = useState(searchKeywords);
+  // 打赏弹窗：只有用户点了入口才会打开（规范 3.2「绝不自动弹出」）
+  const [showDonate, setShowDonate] = useState(false);
   const searchDebounceRef = useRef(null);
   
   // 筛选/排序按钮上要显示的读数
@@ -204,9 +207,14 @@ function Header() {
                   </span>
                 )}
               </button>
+
+              {/* 打赏入口：搜索栏右侧（《打赏功能规范》第六节）。 */}
+              <DonateButton onClick={() => setShowDonate(true)} />
             </div>
           </div>
         )}
+
+        <DonateDialog isOpen={showDonate} onClose={() => setShowDonate(false)} />
 
         {/* 排序面板（移动端） */}
 
@@ -306,6 +314,11 @@ function Header() {
           </button>
 
           <div className="relative w-full">
+            {/* 打赏入口：挂在搜索框**右侧**（筛选按钮在左侧，左右各一个，搜索框仍然居中）。
+                同样用 absolute 定位，否则它会把搜索框往左推半个按钮宽度。 */}
+            <div className="absolute top-0 left-full ml-3">
+              <DonateButton onClick={() => setShowDonate(true)} />
+            </div>
             <Search className="absolute left-3 top-2.5 w-5 h-5 text-gray-400" />
             <input
               type="text"
@@ -347,6 +360,8 @@ function Header() {
           </button>
         </div>
       </div>
+
+      <DonateDialog isOpen={showDonate} onClose={() => setShowDonate(false)} />
 
       {/* 桌面端的筛选/主题色卡片不在这里 —— 它们画在中间图片区（App.jsx），
           这样卡片只挤图片区，左右侧栏高度不受影响。 */}

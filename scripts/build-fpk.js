@@ -278,7 +278,7 @@ function checkVersionConsistency() {
 }
 
 // ==================== 主流程 ====================
-const TOTAL_STEPS = SKIP_DEPS ? 4 : 6;
+const TOTAL_STEPS = SKIP_DEPS ? 5 : 7;
 
 (async () => {
   const pm = detectPackageManager();
@@ -299,6 +299,11 @@ const TOTAL_STEPS = SKIP_DEPS ? 4 : 6;
 
   // ---------- 1. 构建前端 ----------
   let stepNo = 1;
+  // 收款码要在前端构建**之前**重新编译进源码，否则会发出一个"包内的码"和
+  // assets/donate/ 里对不上的版本 —— 这类不一致肉眼看不出来（《打赏功能规范》5.2）。
+  step(stepNo++, TOTAL_STEPS, '生成内嵌收款码 (donate-qr)');
+  run(process.execPath, [path.join(ROOT, 'scripts', 'make-donate-qr.js')], { cwd: ROOT });
+
   step(stepNo++, TOTAL_STEPS, '构建前端 (Vite)');
   if (SKIP_FRONTEND) {
     if (!fs.existsSync(path.join(FRONTEND_DIR, 'dist', 'index.html'))) fail('--skip-frontend 但 frontend/dist 不存在');
@@ -429,11 +434,18 @@ const TOTAL_STEPS = SKIP_DEPS ? 4 : 6;
   // pnpm 的记账文件里记着**构建机的绝对路径**（storeDir、workspace 路径）。
   // 这些文件只在 pnpm 自己管理依赖树时有用，运行 node_modules 里的代码时根本不读，
   // 留着等于把构建机的目录结构随成品发出去（规范里明确不允许主机专属路径进交付物）。
-  const pnpmBookkeeping = ['.modules.yaml', '.pnpm-workspace-state-v1.json', '.pnpm-workspace-state.json'];
+  const pnpmBookkeeping = [
+    '.modules.yaml',
+    '.pnpm-workspace-state-v1.json',
+    '.pnpm-workspace-state.json',
+    '.package-map.json',   // pnpm 的包路径映射表，运行时不读
+    '.pnpm',               // 里面还有一份 lock.yaml 副本，同样只是记账
+  ];
   for (const f of pnpmBookkeeping) {
     const target = path.join(nm(''), f);
     if (fs.existsSync(target)) {
-      fs.rmSync(target, { force: true });
+      // recursive 必须带上：.pnpm 是目录，不带 recursive 会 EISDIR 直接崩
+      fs.rmSync(target, { recursive: true, force: true });
       log(`   已移除 pnpm 记账文件: node_modules/${f}（内含构建机路径，运行时不需要）`);
     }
   }

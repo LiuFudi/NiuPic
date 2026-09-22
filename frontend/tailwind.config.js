@@ -33,6 +33,8 @@ export default {
           900: 'rgb(var(--accent-900) / <alpha-value>)',
           950: 'rgb(var(--accent-950) / <alpha-value>)',
         },
+        // 打赏入口专用的红（不跟随主题色，见 src/index.css 的 --err）
+        err: 'rgb(var(--err) / <alpha-value>)',
         // 优化后的灰色调 - 微暖色调，护眼舒适
         // 基于色彩心理学：避免纯黑，降低对比度，减少眼疲劳
         gray: {

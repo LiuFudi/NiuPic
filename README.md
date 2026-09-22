@@ -3,7 +3,7 @@
 > 为飞牛 fnOS 设计的轻量、快速、稳定的图像素材检索浏览应用。
 > 支持数十万级别图片流畅浏览，非侵入式设计，100% 开源免费。
 
-![版本](https://img.shields.io/badge/version-2.3.10-blue)
+![版本](https://img.shields.io/badge/version-2.4.1-blue)
 ![许可证](https://img.shields.io/badge/license-GPL--3.0--or--later-blue)
 ![平台](https://img.shields.io/badge/platform-fnOS%20x86__64-green)
 
@@ -27,7 +27,7 @@ FlyPic 的作者把这样一个完成度很高、并且真正解决「几十万�
 | 变更 | 说明 |
 |---|---|
 | 品牌 | FlyPic / 飞图 → **牛图 NiuPic** |
-| 版本 | 1.3.0 → **2.3.10** |
+| 版本 | 1.3.0 → **2.4.1** |
 | 应用 ID | `flypic` → `niupic`（安装目录、数据目录同步变更） |
 | 素材库索引目录 | `.flypic` → `.niupic`（提供迁移脚本，见下） |
 | 权限模型 | 新增。素材库只能从「可访问文件夹」（飞牛应用市场里授权的目录）里选，不再手输路径 |
@@ -88,7 +88,7 @@ NiuPic 和其他飞牛应用一样，**默认看不到任何用户文件夹**。
 假设你有素材库 `/vol1/1000/Photos`（卷号以你的 NAS 为准，下面统一写 `/vol1`）：
 
 ```bash
-# 1. 安装牛图 NiuPic（应用中心 → 手动安装 → niupic_2.3.10_x86.fpk）
+# 1. 安装牛图 NiuPic（应用中心 → 手动安装 → niupic_2.4.1_x86.fpk）
 # 2. 在 NAS 上以 root 执行迁移脚本（把 .flypic 就地改成 .niupic）
 node /vol1/@appcenter/niupic/server/scripts/migrate-flypic-dir.js /vol1/1000/Photos
 #    有多个素材库就一次传多个路径
@@ -186,6 +186,13 @@ scripts/                构建脚本
 - **[ZangXincz](https://github.com/ZangXincz)** —— FlyPic 原作者，本项目的全部基础来自他的工作
 - [Sharp](https://sharp.pixelplumbing.com/) · [better-sqlite3](https://github.com/WiseLibs/better-sqlite3) ·
   [react-window](https://github.com/bvaughn/react-window) · [lucide](https://lucide.dev/)
+
+## 打赏支持
+
+应用界面顶栏搜索栏右侧有一个 ❤ 打赏入口。它是**纯本地**的：
+
+- 不联网、不上报、不统计点击；
+- 打赏完全自愿，**不影响任何功能**，也不会改变软件的任何行为。
 
 ## 许可
 
