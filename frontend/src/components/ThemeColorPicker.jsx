@@ -1,3 +1,10 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 LiuFudi
+//
+// This file is part of NiuPic, licensed under the GNU General Public
+// License version 3 or (at your option) any later version.
+// See the LICENSE file for the full text.
+
 /**
  * 主题色选择面板：预设颜色 + 色轮 + 明度 + 十六进制输入
  *
@@ -26,7 +33,7 @@ import {
 /** 停手多久之后才落盘 */
 const PERSIST_DELAY = 400;
 
-export default function ThemeColorPicker({ className = '' }) {
+export default function ThemeColorPicker({ className = '', compact = false }) {
   const { accentColor, changeAccentColor, resetAccentColor } = useTheme();
 
   // 色轮的本地状态（色相 / 饱和度 / 明度）
@@ -113,11 +120,11 @@ export default function ThemeColorPicker({ className = '' }) {
 
   return (
     <div className={className} data-testid="theme-color-picker">
-      <div className="flex items-center justify-between mb-3">
+      <div className={`flex items-center justify-between ${compact ? 'mb-2' : 'mb-3'} gap-2 flex-wrap`}>
         <div className="text-sm font-medium text-gray-700 dark:text-gray-300">
           主题色
           <span className="ml-2 text-xs font-normal text-gray-500 dark:text-gray-400">
-            选一个预设，或用色轮自己调
+            {compact ? '预设或色轮' : '选一个预设，或用色轮自己调'}
           </span>
         </div>
         <button
@@ -135,10 +142,10 @@ export default function ThemeColorPicker({ className = '' }) {
         </button>
       </div>
 
-      <div className="flex flex-col lg:flex-row lg:items-start gap-5">
+      <div className={compact ? 'flex flex-col gap-3 min-w-0' : 'flex flex-col lg:flex-row lg:items-start gap-5 flex-wrap'}>
         {/* 左：预设 + 色轮 */}
         <div className="flex flex-col gap-3">
-          <div className="grid grid-cols-6 gap-2" data-testid="accent-presets">
+          <div className={`grid grid-cols-6 ${compact ? 'gap-1.5' : 'gap-2'}`} data-testid="accent-presets">
             {ACCENT_PRESETS.map((preset) => {
               const active = activePresetId === preset.id;
               return (
@@ -148,7 +155,7 @@ export default function ThemeColorPicker({ className = '' }) {
                   title={preset.name}
                   aria-label={preset.name}
                   onClick={() => handlePreset(preset)}
-                  className={`relative w-8 h-8 rounded-full transition-transform hover:scale-110 focus:outline-none focus-visible:ring-2 focus-visible:ring-offset-1 focus-visible:ring-gray-400 ${
+                  className={`relative ${compact ? 'w-7 h-7' : 'w-8 h-8'} rounded-full transition-transform hover:scale-110 focus:outline-none focus-visible:ring-2 focus-visible:ring-offset-1 focus-visible:ring-gray-400 ${
                     active ? 'ring-2 ring-offset-2 ring-gray-400 dark:ring-offset-gray-800' : ''
                   }`}
                   style={{ backgroundColor: preset.color }}
@@ -159,14 +166,14 @@ export default function ThemeColorPicker({ className = '' }) {
             })}
           </div>
 
-          <div className="flex items-center gap-4">
+          <div className={`flex gap-4 flex-wrap ${compact ? 'items-center' : 'items-center'}`}>
             <ColorWheel
               hue={hsl.h}
               saturation={hsl.s}
               onChange={handleWheelChange}
-              size={168}
+              size={compact ? 132 : 168}
             />
-            <div className="flex flex-col gap-2 w-40">
+            <div className={`flex flex-col gap-2 ${compact ? 'flex-1 min-w-[7rem]' : 'w-40'}`}>
               <div className="text-xs text-gray-500 dark:text-gray-400">明度</div>
               <input
                 type="range"
@@ -191,7 +198,7 @@ export default function ThemeColorPicker({ className = '' }) {
         </div>
 
         {/* 右：实际效果预览 */}
-        <div className="flex flex-col gap-2 lg:ml-2">
+        <div className={`flex flex-col gap-2 ${compact ? 'min-w-0' : 'lg:ml-2'}`}>
           <div className="text-xs text-gray-500 dark:text-gray-400">实际效果</div>
           <div className="flex items-center gap-3">
             <span
@@ -209,7 +216,7 @@ export default function ThemeColorPicker({ className = '' }) {
           </div>
 
           {/* 一排实际控件，直观看到换色之后长什么样 */}
-          <div className="flex items-center gap-2 mt-1">
+          <div className="flex items-center gap-2 mt-1 flex-wrap">
             <span
               className="px-3 py-1.5 rounded-lg text-xs text-white"
               style={{ backgroundColor: effectivePalette.hex[500] }}
@@ -230,7 +237,7 @@ export default function ThemeColorPicker({ className = '' }) {
             </span>
           </div>
 
-          <div className="flex items-center gap-1 mt-1">
+          <div className="flex items-center gap-1 mt-1 flex-wrap">
             {[50, 100, 200, 300, 400, 500, 600, 700, 800, 900, 950].map((stop) => (
               <span
                 key={stop}

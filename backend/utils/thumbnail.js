@@ -1,8 +1,16 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 LiuFudi
+//
+// This file is part of NiuPic, licensed under the GNU General Public
+// License version 3 or (at your option) any later version.
+// See the LICENSE file for the full text.
+
 const sharp = require('sharp');
 const path = require('path');
 const fs = require('fs');
 const crypto = require('crypto');
 const { constants } = require('../src/config');
+const { isRawFile, extractRawPreview } = require('./rawPreview');
 const logger = require('../src/utils/logger');
 
 // 配置 Sharp 内存限制（防止内存泄漏）
@@ -29,7 +37,13 @@ const IMAGE_FORMATS = ['jpg', 'jpeg', 'png', 'webp', 'gif', 'bmp', 'tiff', 'tif'
 // 文件类型分类（用于显示和占位图）
 const FILE_CATEGORIES = {
   // 图片类
-  image: ['jpg', 'jpeg', 'png', 'webp', 'gif', 'bmp', 'tiff', 'tif', 'avif', 'heif', 'heic', 'svg', 'ico', 'raw', 'cr2', 'nef', 'dng'],
+  // 包含各家相机的 RAW：sharp 读不了它们（会退化成占位尺寸），但它们是照片，
+  // 必须归到「图片」而不是「其他」，否则相机库一整批原片会被塞进"其他"里。
+  image: [
+    'jpg', 'jpeg', 'png', 'webp', 'gif', 'bmp', 'tiff', 'tif', 'avif', 'heif', 'heic', 'svg', 'ico',
+    'raw', 'cr2', 'cr3', 'crw', 'nef', 'nrw', 'arw', 'srf', 'sr2', 'dng', 'rw2', 'rwl',
+    'orf', 'raf', 'srw', 'pef', 'ptx', '3fr', 'fff', 'iiq', 'mrw', 'x3f', 'erf', 'kdc', 'mef'
+  ],
 
   // 视频类
   video: ['mp4', 'webm', 'mov', 'avi', 'mkv', 'flv', 'm4v', 'wmv', 'mpg', 'mpeg', '3gp', 'ts', 'vob', 'ogv'],
@@ -87,6 +101,13 @@ function getFileType(filename) {
 function canGenerateThumbnail(filename) {
   const ext = path.extname(filename).toLowerCase().slice(1);
   return IMAGE_FORMATS.includes(ext);
+}
+
+/**
+ * 相机 RAW：sharp 读不了，但文件里内嵌了 JPEG 预览（见 utils/rawPreview.js）
+ */
+function isRawThumbnailable(filename) {
+  return isRawFile(filename);
 }
 
 /**
@@ -346,10 +367,47 @@ async function getImageMetadata(imagePath) {
       }
     }
 
-    // 对于非图片文件或 Sharp 失败的情况，返回基础信息
     const ext = path.extname(imagePath).toLowerCase().slice(1);
+
+    // 相机 RAW：sharp 读不了，但内嵌的 JPEG 预览能给出真实宽高
+    // （以前一律给 640×480 占位，竖拍的片子会被排成横图）
+    if (isRawFile(imagePath)) {
+      try {
+        const preview = extractRawPreview(imagePath);
+        if (preview && preview.width && preview.height) {
+          return {
+            width: preview.width,
+            height: preview.height,
+            format: ext,
+            size: stats.size,
+            created_at: stats.birthtimeMs,
+            modified_at: stats.mtimeMs
+          };
+        }
+      } catch { /* 退回占位尺寸 */ }
+    }
+
+    // 视频：用 ffprobe 拿真实宽高（不解码，很快）
+    if (FILE_CATEGORIES.video.includes(ext)) {
+      try {
+        const info = await probeVideo(imagePath);
+        if (info && info.width && info.height) {
+          return {
+            width: info.width,
+            height: info.height,
+            format: ext,
+            size: stats.size,
+            created_at: stats.birthtimeMs,
+            modified_at: stats.mtimeMs,
+            duration: info.duration || null
+          };
+        }
+      } catch { /* 退回占位尺寸 */ }
+    }
+
+    // 其它非图片文件：返回基础信息（占位尺寸）
     return {
-      width: 640,  // 占位图尺寸
+      width: 640,
       height: 480,
       format: ext,
       size: stats.size,
@@ -395,6 +453,17 @@ async function generateImageThumbnails(imagePath, libraryPath) {
     stepStart = Date.now();
     thumbnailResult = await generateThumbnail(imagePath, out480, targetHeight);
     stepTimes.generate = Date.now() - stepStart;
+  } else if (isRawThumbnailable(imagePath)) {
+    // 相机 RAW：抠出内嵌的 JPEG 预览再缩放 —— 不然网格里只能是一张灰占位图
+    stepStart = Date.now();
+    thumbnailResult = await generateRawThumbnail(imagePath, out480, targetHeight);
+    stepTimes.rawExtract = Date.now() - stepStart;
+
+    if (!thumbnailResult) {
+      stepStart = Date.now();
+      thumbnailResult = await generatePlaceholderThumbnail(out480, 'image', ext);
+      stepTimes.placeholder = Date.now() - stepStart;
+    }
   } else if (fileType === 'video') {
     // 视频：尝试提取封面
     stepStart = Date.now();
@@ -566,66 +635,217 @@ async function extractPSDThumbnail(psdPath, outputPath) {
 }
 
 /**
- * 从视频提取封面（使用 ffmpeg 或系统工具）
- * 注意：这需要系统安装 ffmpeg，如果没有则回退到占位图
+ * 相机 RAW 的缩略图：抠出内嵌的 JPEG 预览再缩放成 webp
+ *
+ * RAW 本身 sharp 读不了，但相机一定会在文件里塞一张 JPEG 预览
+ * （就是回放时屏幕上给你看的那张），用它做缩略图又快又准。
+ *
+ * @returns {Promise<{width,height,size,path}|null>} 失败返回 null（调用方会退回占位图）
+ */
+async function generateRawThumbnail(imagePath, outputPath, targetHeight) {
+  try {
+    const preview = extractRawPreview(imagePath);
+    if (!preview || !preview.buffer) return null;
+
+    const meta = await sharp(preview.buffer).metadata();
+    if (!meta.width || !meta.height) return null;
+
+    // 预览可能是竖拍的（EXIF Orientation 6/8），按它转正
+    const swap = meta.orientation >= 5 && meta.orientation <= 8;
+    const width = swap ? meta.height : meta.width;
+    const height = swap ? meta.width : meta.height;
+    const targetWidth = Math.round(targetHeight * (width / height));
+
+    await sharp(preview.buffer)
+      .rotate()                       // 按 EXIF 自动转正
+      .resize(targetWidth, targetHeight, { fit: 'cover', position: 'center', withoutEnlargement: true })
+      .webp({ quality: 92 })
+      .toFile(outputPath);
+
+    const stats = fs.statSync(outputPath);
+    return {
+      width: targetWidth,
+      height: targetHeight,
+      size: stats.size,
+      path: outputPath,
+      rawPreview: { from: preview.source, previewWidth: meta.width, previewHeight: meta.height },
+    };
+  } catch (error) {
+    console.warn(`  ⚠️ RAW 预览提取失败 ${path.basename(imagePath)}: ${error.message}`);
+    return null;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// 视频封面：ffmpeg / ffprobe
+//
+// 上一版的实现有几个坑，正好对应"部分 mov / mp4 没有缩略图"：
+//   1. `exec('ffmpeg -version', {timeout: 2000})` —— 系统忙的时候 2 秒可能不够，
+//      判成"没有 ffmpeg"就把**所有**视频缩略图都跳过了
+//   2. 固定取第 2 秒的帧 —— 比 2 秒还短的片子（手机随手拍的小片段）取不到帧，
+//      于是没有缩略图
+//   3. 外层 10 秒超时 + 输出侧 -ss（要解码到第 2 秒）—— 4K 长片在 NAS 上经常超时
+//   4. exec 拼字符串 —— 路径里有空格/引号/中文会挂（用户的库里这些都有）
+//
+// 现在：ffmpeg/ffprobe 路径探测一次并缓存；用 execFile + 参数数组（不拼 shell 字符串）；
+// 按 ffprobe 给的时长挑若干时间点依次尝试；输入侧 -ss（快）+ 缩放到 640 宽减小解码量。
+// ---------------------------------------------------------------------------
+
+const FFMPEG_CANDIDATES = [
+  process.env.FFMPEG_PATH,
+  '/usr/bin/ffmpeg',
+  '/usr/local/bin/ffmpeg',
+  '/usr/trim/bin/ffmpeg',
+  '/vol1/@appstore/ffmpeg/bin/ffmpeg',
+  'ffmpeg',
+].filter(Boolean);
+
+const FFPROBE_CANDIDATES = [
+  process.env.FFPROBE_PATH,
+  '/usr/bin/ffprobe',
+  '/usr/local/bin/ffprobe',
+  '/usr/trim/bin/ffprobe',
+  '/vol1/@appstore/ffmpeg/bin/ffprobe',
+  'ffprobe',
+].filter(Boolean);
+
+let ffmpegPathCache;
+let ffprobePathCache;
+
+/** 逐个候选试跑 -version，找到能用的那个（结果缓存，只探测一次） */
+async function resolveBinary(candidates, cacheKey) {
+  const { execFile } = require('child_process');
+  const util = require('util');
+  const execFileAsync = util.promisify(execFile);
+
+  for (const bin of candidates) {
+    try {
+      await execFileAsync(bin, ['-version'], { timeout: 15000 });
+      return bin;
+    } catch { /* 试下一个 */ }
+  }
+  return null;
+}
+
+async function getFfmpegPath() {
+  if (ffmpegPathCache === undefined) {
+    ffmpegPathCache = await resolveBinary(FFMPEG_CANDIDATES);
+    if (!ffmpegPathCache) logger.warn('没有找到 ffmpeg，视频将没有封面（只显示占位图）');
+  }
+  return ffmpegPathCache;
+}
+
+async function getFfprobePath() {
+  if (ffprobePathCache === undefined) ffprobePathCache = await resolveBinary(FFPROBE_CANDIDATES);
+  return ffprobePathCache;
+}
+
+/** 用 ffprobe 读视频信息（宽高、时长）——只读头部，不解码 */
+async function probeVideo(videoPath) {
+  const probe = await getFfprobePath();
+  if (!probe) return null;
+
+  const { execFile } = require('child_process');
+  const util = require('util');
+  const execFileAsync = util.promisify(execFile);
+
+  try {
+    const { stdout } = await execFileAsync(probe, [
+      '-v', 'error',
+      '-select_streams', 'v:0',
+      '-show_entries', 'stream=width,height,duration:format=duration',
+      '-of', 'json',
+      videoPath,
+    ], { timeout: 20000, maxBuffer: 4 * 1024 * 1024 });
+
+    const data = JSON.parse(stdout || '{}');
+    const stream = (data.streams && data.streams[0]) || {};
+    const duration = Number(stream.duration || (data.format && data.format.duration)) || null;
+    return {
+      width: Number(stream.width) || null,
+      height: Number(stream.height) || null,
+      duration,
+    };
+  } catch {
+    return null;
+  }
+}
+
+/** 按视频时长挑几个"取帧时间点"：短片取开头，长片取四分之一处（避开黑场） */
+function frameTimestamps(duration) {
+  if (!duration || !Number.isFinite(duration) || duration <= 0) {
+    return [0.5, 1, 2, 0];
+  }
+  if (duration <= 1) return [0, duration * 0.5];
+  if (duration <= 3) return [duration * 0.5, 1, 0];
+  return [Math.min(duration * 0.25, 5), 1, 2, 0];
+}
+
+/**
+ * 从视频提取封面
+ * @returns {Promise<{width,height,size,path}|null>}
  */
 async function extractVideoThumbnail(videoPath, outputPath) {
-  try {
-    const { exec } = require('child_process');
-    const util = require('util');
-    const execPromise = util.promisify(exec);
+  const ffmpeg = await getFfmpegPath();
+  if (!ffmpeg) return null;
 
-    // 检查是否有 ffmpeg
+  const { execFile } = require('child_process');
+  const util = require('util');
+  const execFileAsync = util.promisify(execFile);
+
+  const info = await probeVideo(videoPath);
+  const tempJpg = outputPath.replace(/\.webp$/i, '_temp.jpg');
+
+  for (const ts of frameTimestamps(info && info.duration)) {
     try {
-      await execPromise('ffmpeg -version', { timeout: 2000 });
-    } catch (e) {
-      console.warn('  ⚠️ ffmpeg not found, skipping video thumbnail extraction');
-      return null;
-    }
+      if (fs.existsSync(tempJpg)) fs.unlinkSync(tempJpg);
 
-    // 使用 ffmpeg 提取第 2 秒的帧（避免黑屏）
-    const tempJpg = outputPath.replace('.webp', '_temp.jpg');
-    const ffmpegCmd = `ffmpeg -i "${videoPath}" -ss 00:00:02 -vframes 1 -q:v 2 "${tempJpg}" -y`;
+      await execFileAsync(ffmpeg, [
+        '-hide_banner', '-loglevel', 'error',
+        '-ss', String(Math.max(0, ts)),      // 输入侧 seek：快
+        '-i', videoPath,
+        '-frames:v', '1',
+        '-vf', `scale=${constants.THUMBNAIL_GENERATION.TARGET_WIDTH || 640}:-2:flags=lanczos`,
+        '-q:v', '3',
+        '-y', tempJpg,
+      ], { timeout: 30000, maxBuffer: 8 * 1024 * 1024 });
 
-    await execPromise(ffmpegCmd, { timeout: 10000 });
+      if (!fs.existsSync(tempJpg) || fs.statSync(tempJpg).size === 0) continue;
 
-    // 如果生成了 JPG，转换为 WebP
-    if (fs.existsSync(tempJpg)) {
-      // 先获取实际尺寸
       const metadata = await sharp(tempJpg).metadata();
+      if (!metadata.width || !metadata.height) continue;
 
-      // 保持宽高比缩放到 480 高度
-      const aspectRatio = metadata.width / metadata.height;
-      const targetHeight = 480;
-      const targetWidth = Math.round(targetHeight * aspectRatio);
+      const targetWidth = constants.THUMBNAIL_GENERATION.TARGET_WIDTH || 640;
+      const targetHeight = Math.round(targetWidth * (metadata.height / metadata.width));
 
       await sharp(tempJpg)
-        .resize(targetWidth, targetHeight, {
-          fit: 'cover',
-          position: 'center',
-          kernel: 'lanczos3',
-          withoutEnlargement: true
-        })
-        .webp({ quality: 92, smartSubsample: false })
+        .resize(targetWidth, targetHeight, { fit: 'inside', withoutEnlargement: true })
+        .webp({ quality: 90 })
         .toFile(outputPath);
 
-      fs.unlinkSync(tempJpg);  // 删除临时 JPG
+      fs.unlinkSync(tempJpg);
 
       const stats = fs.statSync(outputPath);
       return {
         width: targetWidth,
         height: targetHeight,
         size: stats.size,
-        path: outputPath
+        path: outputPath,
+        videoFrameAt: ts,
       };
+    } catch (error) {
+      // 换下一个时间点再试
+      lastVideoError = error.message;
     }
-
-    return null;
-  } catch (error) {
-    console.warn(`  ⚠️ Failed to extract video thumbnail: ${error.message}`);
-    return null;
   }
+
+  if (lastVideoError) {
+    logger.warn(`视频封面提取失败 ${path.basename(videoPath)}: ${lastVideoError}`);
+  }
+  return null;
 }
+
+let lastVideoError = null;
 
 /**
  * 生成占位缩略图（用于视频/文档等）

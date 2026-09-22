@@ -1,6 +1,14 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 LiuFudi
+//
+// This file is part of NiuPic, licensed under the GNU General Public
+// License version 3 or (at your option) any later version.
+// See the LICENSE file for the full text.
+
 import { useEffect, useRef, useState, useCallback } from 'react';
 import { useLibraryStore } from '../stores/useLibraryStore';
 import { useImageStore } from '../stores/useImageStore';
+import { buildImageQueryParams } from '../utils/imageQuery';
 import { useUIStore } from '../stores/useUIStore';
 import { useScanStore } from '../stores/useScanStore';
 import { imageAPI } from '../api';
@@ -63,21 +71,16 @@ function MainContent() {
     });
 
     try {
-      // 直接从后端加载一页数据（每次 100 张，更轻量）
-      const params = {
+      // 参数拼装统一走 buildImageQueryParams（和翻页用的同一份，
+      // 避免"一边带排序、一边不带"这种两处写法不一致的问题）
+      const params = buildImageQueryParams({
+        folder: selectedFolder,
+        keywords: searchKeywords,
+        filters,
+        sort,
         offset: isInitialLoad ? 0 : imageLoadingState.loadedCount,
-        limit: 100
-      };
-      if (selectedFolder) params.folder = selectedFolder;
-      if (searchKeywords) params.keywords = searchKeywords;
-      if (filters.formats?.length > 0) params.formats = filters.formats.join(',');
-      // 排序交给后端做（字段白名单在 backend/src/config/constants.js 的 SORT.FIELDS）。
-      // 必须后端排：前端只拿到一页 100 张，本地排只能排这一页，翻页就乱了。
-      if (sort) {
-        params.sort = sort.field;
-        params.order = sort.order;
-        if (sort.field === 'random') params.seed = sort.seed;
-      }
+        limit: 100,
+      });
 
       const response = await imageAPI.search(currentLibraryId, params, {
         signal: requestContext.signal
@@ -101,7 +104,11 @@ function MainContent() {
 
       useImageStore.getState().setImageLoadingState({
         isLoading: false,
-        loadedCount: images.length,
+        // 这里是首屏（isInitialLoad），本页条数就是已加载总数；
+        // 翻页的累加在 useInfiniteScroll 里做
+        loadedCount: isInitialLoad
+          ? images.length
+          : imageLoadingState.loadedCount + images.length,
         totalCount: total,
         hasMore: hasMore || false,
       });
@@ -124,9 +131,13 @@ function MainContent() {
         currentRequestContextRef.current = null;
       }
     }
-  }, [currentLibraryId, searchKeywords, selectedFolder, setImages, setOriginalImages, cancelCurrentRequest, sort]);
+  }, [currentLibraryId, searchKeywords, selectedFolder, setImages, setOriginalImages, cancelCurrentRequest, sort, filters]);
 
-  // 监听文件夹/搜索变化
+  // 监听文件夹 / 搜索 / 筛选变化
+  //
+  // 筛选必须在这里触发重新请求：筛选条件是在后端 SQL 里生效的（见 imageQuery.js），
+  // 之前筛选只在前端对"已经加载的那一页"做本地过滤，翻页之后的图根本筛不到，
+  // 所以 filters 变化不会重新请求也一直没被发现。
   useEffect(() => {
     if (!currentLibraryId) return;
 
@@ -157,7 +168,7 @@ function MainContent() {
         clearTimeout(debounceTimerRef.current);
       }
     };
-  }, [currentLibraryId, searchKeywords, selectedFolder, loadImages, cancelCurrentRequest]);
+  }, [currentLibraryId, searchKeywords, selectedFolder, loadImages, cancelCurrentRequest, filters]);
 
   // 恢复撤销前的文件夹状态
   useEffect(() => {

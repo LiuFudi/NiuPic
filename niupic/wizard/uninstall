@@ -1,0 +1,31 @@
+[
+    {
+        "stepTitle": "卸载选项",
+        "items": [
+            {
+                "type": "tips",
+                "helpText": "<div style=\"background: #f6ffed; border: 1px solid #b7eb8f; border-radius: 8px; padding: 14px; margin: 8px 0;\"><div style=\"font-size: 15px; font-weight: bold; color: #389e0d; margin-bottom: 6px;\">推荐保留配置</div><div style=\"font-size: 13px; color: #666; line-height: 1.7;\">保留之后，以后重装或换版本安装都不用重新添加素材库、不用重新设密码、主题色也还在。</div></div>"
+            },
+            {
+                "type": "radio",
+                "field": "wizard_data_action",
+                "label": "NiuPic 的配置和数据",
+                "initValue": "keep",
+                "options": [
+                    {
+                        "label": "保留（推荐）",
+                        "value": "keep"
+                    },
+                    {
+                        "label": "全部删除",
+                        "value": "delete"
+                    }
+                ]
+            },
+            {
+                "type": "tips",
+                "helpText": "<div style=\"background: #fff8e6; border: 1px solid #ffe58f; border-radius: 8px; padding: 14px; margin: 8px 0;\"><div style=\"font-size: 13px; color: #666; line-height: 1.7;\"><strong>「配置和数据」指的是：</strong>素材库列表、访问密码、界面偏好（主题、主题色、缩略图大小）。<br><strong>素材库本身（照片和缩略图）在选「全部删除」时也不会被删</strong> —— 它们在你的素材库目录里，只能由你自己在文件管理器中处理。</div></div>"
+            }
+        ]
+    }
+]

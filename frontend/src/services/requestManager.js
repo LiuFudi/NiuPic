@@ -1,3 +1,10 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 LiuFudi
+//
+// This file is part of NiuPic, licensed under the GNU General Public
+// License version 3 or (at your option) any later version.
+// See the LICENSE file for the full text.
+
 /**
  * RequestManager - 统一管理异步请求的生命周期
  * 支持请求取消、去重、竞态条件处理

@@ -68,3 +68,15 @@ test-library/
 
 # 打包用的压缩包（发布时走 GitHub Release，不进仓库）
 /*.zip
+*.fpk
+
+# 打包脚本生成的文件（真源是根目录的 LICENSE 与 scripts/，不要提交副本）
+/niupic/app/ui/LICENSE.txt
+/niupic/app/server/
+
+# 交付存档（备份区里每个版本一个目录，见 交付存档.md）。
+# 这些规则只在"备份区的那个 clone"里有意义 —— 存档跟着备份区走，不进源码仓库。
+/[0-9]*.[0-9]*/
+
+# 交付存档索引（描述备份区目录结构，不属于源码项目本身）
+/交付存档.md

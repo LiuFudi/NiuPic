@@ -1,3 +1,11 @@
+/* SPDX-License-Identifier: GPL-3.0-or-later
+ * Copyright (C) 2026 LiuFudi
+ *
+ * This file is part of NiuPic, licensed under the GNU General Public
+ * License version 3 or (at your option) any later version.
+ * See the LICENSE file for the full text.
+ */
+
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
@@ -229,4 +237,97 @@ body {
   background: #ffffff;
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.5);
   cursor: pointer;
+}
+
+/* 区间双滑块（文件大小用）：两个原生 range 叠在一起
+   —— input 本身不吃指针事件，只有圆形把手吃，这样两层滑块可以各拖各的 */
+.niupic-range {
+  position: relative;
+  height: 22px;
+}
+
+.niupic-range-track,
+.niupic-range-fill {
+  position: absolute;
+  top: 9px;
+  height: 4px;
+  border-radius: 999px;
+}
+
+.niupic-range-track {
+  left: 0;
+  right: 0;
+  background: rgba(148, 163, 184, 0.45);
+}
+
+.niupic-range-fill {
+  background: rgb(var(--accent-500));
+}
+
+.niupic-range input[type='range'] {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 100%;
+  height: 22px;
+  margin: 0;
+  padding: 0;
+  background: transparent;
+  -webkit-appearance: none;
+  appearance: none;
+  pointer-events: none;
+  outline: none;
+}
+
+.niupic-range input[type='range']::-webkit-slider-runnable-track {
+  height: 22px;
+  background: transparent;
+  border: none;
+}
+
+.niupic-range input[type='range']::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  pointer-events: auto;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: #ffffff;
+  border: 2px solid rgb(var(--accent-500));
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.35);
+  cursor: grab;
+}
+
+.niupic-range input[type='range']::-moz-range-thumb {
+  pointer-events: auto;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: #ffffff;
+  border: 2px solid rgb(var(--accent-500));
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.35);
+  cursor: grab;
+}
+
+/* 刻度在滑块**下方**（不是侧面）：每个刻度正对着自己的停靠点 */
+.niupic-range-ticks {
+  position: relative;
+  height: 14px;
+  margin-top: 2px;
+}
+
+.niupic-range-tick {
+  position: absolute;
+  top: 0;
+  transform: translateX(-50%);
+  font-size: 10px;
+  line-height: 14px;
+  color: #9ca3af;
+  white-space: nowrap;
+  user-select: none;
+}
+
+.niupic-range-tick[data-active='true'] {
+  color: rgb(var(--accent-500));
+  font-weight: 600;
 }

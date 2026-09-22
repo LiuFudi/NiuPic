@@ -1,4 +1,11 @@
 #!/usr/bin/env node
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 LiuFudi
+//
+// This file is part of NiuPic, licensed under the GNU General Public
+// License version 3 or (at your option) any later version.
+// See the LICENSE file for the full text.
+
 /**
  * NiuPic 飞牛 fnOS 打包脚本（跨平台，无需 Docker）
  *
@@ -39,12 +46,19 @@ const PACK_DIR = path.join(ROOT, 'niupic');
 const SERVER_DIR = path.join(PACK_DIR, 'app', 'server');
 const BUILD_DIR = path.join(ROOT, 'build');
 const DEPS_DIR = path.join(BUILD_DIR, 'server-deps');
+// 运行时依赖树的锁文件，**进仓库**（build/ 是忽略目录，所以放在 scripts/ 下）。
+// 为什么必须有：backend/package.json 里写的是 ^11.10.0 这种范围，直接 pnpm install
+// 每次解析出的 transitive 版本可能不同 —— 同一个源码包在两次构建里装出的依赖不一样，
+// 交付出去的包就没法复现，也等于把"上游什么时候发了新版"的随机性带进了成品。
+const DEPS_LOCK_DIR = path.join(ROOT, 'scripts', 'server-deps');
+const DEPS_LOCK = path.join(DEPS_LOCK_DIR, 'pnpm-lock.yaml');
 const PREBUILT_DIR = path.join(BUILD_DIR, 'prebuilt');
 const DIST_DIR = path.join(ROOT, 'dist');
 
 const args = process.argv.slice(2);
 const SKIP_FRONTEND = args.includes('--skip-frontend');
 const SKIP_DEPS = args.includes('--skip-deps');
+const UPDATE_LOCK = args.includes('--update-lockfile');
 
 const nm = (p) => path.join(SERVER_DIR, 'node_modules', ...p.split('/'));
 
@@ -245,6 +259,24 @@ function readManifestVersion() {
   return line.split('=')[1].trim();
 }
 
+// 版本号只能有一处"真源"，但实际必然写在三个地方（包清单、npm 包、变更日志）。
+// 漏改一处就会发出一个版本号自相矛盾的包，所以构建时先交叉校验，直接拦住。
+function checkVersionConsistency() {
+  const manifestVersion = readManifestVersion();
+
+  const pkg = JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8'));
+  if (pkg.version !== manifestVersion) {
+    fail(`版本号不一致：niupic/manifest = ${manifestVersion}，package.json = ${pkg.version}`);
+  }
+
+  const changelog = fs.readFileSync(path.join(ROOT, 'CHANGELOG.md'), 'utf8');
+  if (!new RegExp(`^##\\s*${manifestVersion.replace(/\./g, '\\.')}\\s*$`, 'm').test(changelog)) {
+    fail(`CHANGELOG.md 里没有 ${manifestVersion} 的条目（应有一行 "## ${manifestVersion}"）`);
+  }
+
+  return manifestVersion;
+}
+
 // ==================== 主流程 ====================
 const TOTAL_STEPS = SKIP_DEPS ? 4 : 6;
 
@@ -256,6 +288,14 @@ const TOTAL_STEPS = SKIP_DEPS ? 4 : 6;
   console.log('║        NiuPic 飞牛 fnOS 打包（跨平台，无需 Docker）        ║');
   console.log('╚════════════════════════════════════════════════════════════╝');
   log(`   包管理器: ${pm}   fnpack: ${fnpack}`);
+
+  // 版本号交叉校验放在最前面：改漏了直接停，不要浪费几分钟构建完才发现
+  const version = checkVersionConsistency();
+  log(`   版本号: ${version}（manifest / package.json / CHANGELOG 一致）`);
+
+  // SPDX 头兜底扫描（新增文件最容易漏，见 scripts/check-spdx.js）。
+  // 用 process.execPath 而不是 'node'：打包脚本可能跑在 node 不在 PATH 的机器上。
+  run(process.execPath, [path.join(ROOT, 'scripts', 'check-spdx.js')], { cwd: ROOT });
 
   // ---------- 1. 构建前端 ----------
   let stepNo = 1;
@@ -284,6 +324,13 @@ const TOTAL_STEPS = SKIP_DEPS ? 4 : 6;
     log(`   目录: ${dir}/`);
   }
   fs.cpSync(path.join(FRONTEND_DIR, 'dist'), path.join(SERVER_DIR, 'public'), { recursive: true });
+  // 协议全文要跟着成品走：用户装完包，在应用里就能看到自己拿到的是什么协议，
+  // 不用去翻仓库。两处都放 —— app/ui/ 是 fnOS 的应用资源目录（规矩里的位置），
+  // server/public/ 由后端静态托管，界面上「关于」页直接链过去。
+  fs.copyFileSync(path.join(ROOT, 'LICENSE'), path.join(SERVER_DIR, 'public', 'LICENSE.txt'));
+  fs.mkdirSync(path.join(PACK_DIR, 'app', 'ui'), { recursive: true });
+  fs.copyFileSync(path.join(ROOT, 'LICENSE'), path.join(PACK_DIR, 'app', 'ui', 'LICENSE.txt'));
+  log('   文件: public/LICENSE.txt 与 app/ui/LICENSE.txt  ← LICENSE');
   // 运维小工具一起进包（例如从 FlyPic 迁移索引目录的脚本）
   const TOOLS_DIR = path.join(ROOT, 'scripts', 'tools');
   if (fs.existsSync(TOOLS_DIR)) {
@@ -334,7 +381,25 @@ const TOTAL_STEPS = SKIP_DEPS ? 4 : 6;
     ].join('\n'));
     fs.writeFileSync(path.join(DEPS_DIR, '.npmrc'), 'node-linker=hoisted\npackage-import-method=copy\n');
 
-    run(pm, ['install', '--prod', '--ignore-scripts'], { cwd: DEPS_DIR });
+    // 有锁文件就锁定安装（--frozen-lockfile 会在 package.json 与锁文件不一致时报错退出，
+    // 正好挡住"改了 backend/package.json 但忘了更新锁文件"这种情况）；
+    // 想更新锁文件：node scripts/build-fpk.js --update-lockfile
+    const haveLock = fs.existsSync(DEPS_LOCK);
+    if (haveLock && !UPDATE_LOCK) {
+      fs.copyFileSync(DEPS_LOCK, path.join(DEPS_DIR, 'pnpm-lock.yaml'));
+      log(`   使用锁文件 scripts/server-deps/pnpm-lock.yaml（依赖版本锁定）`);
+      run(pm, ['install', '--prod', '--ignore-scripts', '--frozen-lockfile'], { cwd: DEPS_DIR });
+    } else {
+      if (UPDATE_LOCK) log('   --update-lockfile：重新解析依赖并写回锁文件');
+      else if (!haveLock) log('   没有锁文件，首次解析依赖（之后会写入 scripts/server-deps/）');
+      run(pm, ['install', '--prod', '--ignore-scripts'], { cwd: DEPS_DIR });
+      const generated = path.join(DEPS_DIR, 'pnpm-lock.yaml');
+      if (fs.existsSync(generated)) {
+        fs.mkdirSync(DEPS_LOCK_DIR, { recursive: true });
+        fs.copyFileSync(generated, DEPS_LOCK);
+        log('   已写入 scripts/server-deps/pnpm-lock.yaml（记得一起提交）');
+      }
+    }
 
     // 移除 musl 变体，避免把错误的 libc 版本打进 fpk
     for (const musl of ['@img/sharp-linuxmusl-x64', '@img/sharp-libvips-linuxmusl-x64']) {
@@ -360,6 +425,18 @@ const TOTAL_STEPS = SKIP_DEPS ? 4 : 6;
   // 所以整目录删掉即可（Windows 上生成的是 .CMD/.ps1 文件，删掉同样无害）。
   stripBinAndSymlinks(nm(''));
   log('   已清理 node_modules/.bin 与残留软链接（否则飞牛解压会失败）');
+
+  // pnpm 的记账文件里记着**构建机的绝对路径**（storeDir、workspace 路径）。
+  // 这些文件只在 pnpm 自己管理依赖树时有用，运行 node_modules 里的代码时根本不读，
+  // 留着等于把构建机的目录结构随成品发出去（规范里明确不允许主机专属路径进交付物）。
+  const pnpmBookkeeping = ['.modules.yaml', '.pnpm-workspace-state-v1.json', '.pnpm-workspace-state.json'];
+  for (const f of pnpmBookkeeping) {
+    const target = path.join(nm(''), f);
+    if (fs.existsSync(target)) {
+      fs.rmSync(target, { force: true });
+      log(`   已移除 pnpm 记账文件: node_modules/${f}（内含构建机路径，运行时不需要）`);
+    }
+  }
 
   // ---------- 4. 放入原生模块预编译产物 ----------
   step(stepNo++, TOTAL_STEPS, '安装原生模块预编译产物');
@@ -403,7 +480,6 @@ const TOTAL_STEPS = SKIP_DEPS ? 4 : 6;
   step(stepNo++, TOTAL_STEPS, '调用 fnpack 生成 .fpk');
   run(fnpack, ['build', '--directory', PACK_DIR], { cwd: ROOT });
 
-  const version = readManifestVersion();
   const produced = path.join(ROOT, 'niupic.fpk');
   if (!fs.existsSync(produced)) fail('fnpack 未生成 niupic.fpk');
 

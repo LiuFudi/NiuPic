@@ -1,14 +1,22 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 LiuFudi
+//
+// This file is part of NiuPic, licensed under the GNU General Public
+// License version 3 or (at your option) any later version.
+// See the LICENSE file for the full text.
+
 /**
  * 图片瀑布流组件 - 重构版
  * 从 1880 行精简到 ~300 行，通过提取 hooks 和组件实现
  */
 
-import { useState, useMemo, useCallback, useRef } from 'react';
+import { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import { VariableSizeList as List } from 'react-window';
 
 // Stores
 import { useLibraryStore } from '../stores/useLibraryStore';
 import { useImageStore } from '../stores/useImageStore';
+import { useUIStore } from '../stores/useUIStore';
 
 // Custom Hooks
 import { useWaterfallLayout } from '../hooks/useWaterfallLayout';
@@ -23,7 +31,6 @@ import { useImageKeyboard } from '../hooks/useImageKeyboard';
 import { useInfiniteScroll } from '../hooks/useInfiniteScroll';
 
 // Utils
-import { filterImages } from '../utils/imageFilters';
 import { imageAPI } from '../api';
 import { requestFullscreen } from '../utils/fullscreen';
 
@@ -69,14 +76,18 @@ function ImageWaterfall() {
   const listRef = useRef(null);
   const prevRowCountRef = useRef(0);
 
-  // 前端筛选
-  const filteredImages = useMemo(() => {
-    return filterImages(images, filters);
-  }, [images, filters]);
+  // 筛选已全部下沉到后端 SQL（见 imageQuery.js / ImageModel._buildSearchQuery）。
+  // 之前这里是 filterImages(images, filters) 本地筛，只能筛到已加载的第一页，
+  // 翻页之后的图完全不受筛选影响 —— 和排序那次的 bug 是同一类问题。
+  const filteredImages = images;
 
   // 瀑布流布局
-  const { rows, flatImages, containerRef, containerWidth, containerHeight, getRowHeight } = 
-    useWaterfallLayout(filteredImages);
+  const rowGap = useUIStore((st) => st.rowGap);
+  const separateByFolder = useUIStore((st) => st.separateByFolder);
+  const thumbnailHeight = useUIStore((st) => st.thumbnailHeight);
+
+  const { rows, flatImages, containerRef, containerWidth, containerHeight, getRowHeight, rowPadding } = 
+    useWaterfallLayout(filteredImages, { rowGap, separateByFolder });
 
   // 删除和撤销
   const { undoHistory, undoToast, setUndoToast, handleQuickDelete, handleUndo } = 
@@ -398,8 +409,14 @@ function ImageWaterfall() {
       flatIndexBase += rows[i]?.length || 0;
     }
     
+    const showFolderLine = separateByFolder && row.startsNewFolder === true;
+
     return (
-      <div style={{ ...style, paddingBottom: '32px' }} className="flex gap-4">
+      <div
+        style={{ ...style, paddingBottom: `${rowPadding}px` }}
+        className={`flex gap-4 ${showFolderLine ? 'border-t-2 border-gray-300 dark:border-gray-600 pt-3' : ''}`}
+        data-folder-line={showFolderLine ? 'true' : undefined}
+      >
         {row.map((image, imageIndex) => {
           const flatIndex = flatIndexBase + imageIndex;
           const isSingleSelected = selectedImage?.id === image.id;
@@ -445,22 +462,93 @@ function ImageWaterfall() {
     handleCancelRename
   ]);
 
-  // 虚拟列表更新
-  useRef(() => {
-    if (listRef.current && filteredImages.length > VIRTUAL_SCROLL_THRESHOLD) {
-      const prevRowCount = prevRowCountRef.current;
-      const currRowCount = rows.length;
-      
-      if (currRowCount > prevRowCount && prevRowCount > 0) {
-        const resetIndex = Math.max(0, prevRowCount - 1);
-        listRef.current.resetAfterIndex(resetIndex);
-      } else if (currRowCount !== prevRowCount) {
-        listRef.current.resetAfterIndex(0);
+  /**
+   * 虚拟列表的行高缓存刷新
+   *
+   * ⚠️ 这段原来是 `useRef(() => {...})` —— useRef 的回调**永远不会执行**，
+   * 所以 resetAfterIndex 一次都没被调用过，react-window 一直用着旧的行高缓存。
+   *
+   * 后果就是用户看到的「远大于行间距的空白条」：只要重新排版过一次
+   * （拖侧栏宽度、拉缩略图大小、改行间距…），每行的实际高度都变了，
+   * 但列表还按旧高度摆放，多出来的差就变成一条条白带。
+   *
+   * 所以这里分两种情况：
+   *   - 影响**所有行**的排版参数变了 → 从头开始重算（resetAfterIndex(0)）
+   *   - 只是往下又加载了一批（前面的行没变）→ 从最后一行开始重算就够了
+   */
+  const layoutKey = `${Math.round(containerWidth)}|${thumbnailHeight}|${rowGap}|${separateByFolder}`;
+  const prevLayoutKeyRef = useRef(layoutKey);
+
+  // 滚动位置 + 上一次的行几何，用来做「滚动锚定」（见下面 effect 的说明）
+  const scrollOffsetRef = useRef(0);
+  const prevGeometryRef = useRef({ rows: [], getRowHeight: () => 0 });
+
+  useEffect(() => {
+    const list = listRef.current;
+    if (!list || filteredImages.length <= VIRTUAL_SCROLL_THRESHOLD) return;
+
+    const prevRowCount = prevRowCountRef.current;
+    const currRowCount = rows.length;
+    const prev = prevGeometryRef.current;
+
+    if (prevLayoutKeyRef.current !== layoutKey) {
+      // 容器宽度 / 缩略图高度 / 行间距 / 分隔开关变了：所有行高都可能变。
+      //
+      // 这里要做**滚动锚定**：不改的话，拖缩略图滑块时每一行的高矮都变了，
+      // 但列表的滚动位置还是那个像素值，于是画面里的图片会整体上下乱窜。
+      // 做法是先把「视口顶部那一行 + 它被卷上去多少」记下来，
+      // 重算之后再把这个行放回原来的位置。
+      const scrollTop = scrollOffsetRef.current;
+
+      // 锚定的对象是**图片**而不是「第几行」——
+      // 改尺寸后每行能放的张数会变，同一张图会换到别的行里去，
+      // 只记行号的话它照样会跑掉。所以记「视口顶部那张图的序号 + 它在行内的偏移」。
+      const findAnchor = (rowsArr, heightFn) => {
+        let acc = 0;
+        let flat = 0;
+        for (let i = 0; i < rowsArr.length; i++) {
+          const h = heightFn(i);
+          if (acc + h > scrollTop) return { flatIndex: flat, offset: scrollTop - acc };
+          acc += h;
+          flat += rowsArr[i].length;
+        }
+        return { flatIndex: Math.max(0, flat - 1), offset: 0 };
+      };
+
+      const rowTopOf = (rowsArr, heightFn, flatIndex) => {
+        let acc = 0;
+        let flat = 0;
+        for (let i = 0; i < rowsArr.length; i++) {
+          if (flatIndex < flat + rowsArr[i].length) return acc;
+          acc += heightFn(i);
+          flat += rowsArr[i].length;
+        }
+        return acc;
+      };
+
+      const anchor = prev.rows.length > 0
+        ? findAnchor(prev.rows, prev.getRowHeight)
+        : { flatIndex: 0, offset: 0 };
+
+      list.resetAfterIndex(0);
+
+      // 用新几何把这张图放回原来的高度位置
+      const target = Math.max(0, rowTopOf(rows, getRowHeight, anchor.flatIndex) + anchor.offset);
+      if (Math.abs(target - scrollTop) > 1) {
+        list.scrollTo(target);
+        scrollOffsetRef.current = target;
       }
-      
-      prevRowCountRef.current = currRowCount;
+      prevLayoutKeyRef.current = layoutKey;
+    } else if (currRowCount > prevRowCount && prevRowCount > 0) {
+      // 只是追加了新图片，前面的行没动
+      list.resetAfterIndex(Math.max(0, prevRowCount - 1));
+    } else if (currRowCount !== prevRowCount) {
+      list.resetAfterIndex(0);
     }
-  }, [rows, filteredImages.length]);
+
+    prevRowCountRef.current = currRowCount;
+    prevGeometryRef.current = { rows, getRowHeight };
+  }, [rows, filteredImages.length, layoutKey]);
 
   // 是否启用虚拟滚动
   const useVirtualScroll = filteredImages.length > VIRTUAL_SCROLL_THRESHOLD;
@@ -510,6 +598,7 @@ function ImageWaterfall() {
           className="p-4"
           overscanCount={LOAD_CONFIG.overscanCount}
           onScroll={({ scrollOffset, scrollDirection }) => {
+            scrollOffsetRef.current = scrollOffset;
             if (scrollDirection === 'forward' && imageLoadingState.hasMore && !imageLoadingState.isLoading) {
               const totalHeight = rows.reduce((sum, _, i) => sum + getRowHeight(i), 0);
               const scrollBottom = scrollOffset + (containerHeight || 600);
@@ -533,14 +622,18 @@ function ImageWaterfall() {
             }
           }}
         >
-          <div className="space-y-8">
+          <div>
             {rows.map((row, rowIndex) => {
               let flatIndexBase = 0;
               for (let i = 0; i < rowIndex; i++) {
                 flatIndexBase += rows[i]?.length || 0;
               }
               return (
-                <div key={rowIndex} className="flex gap-4">
+                <div
+                  key={rowIndex}
+                  style={{ paddingBottom: `${rowPadding}px` }}
+                  className={`flex gap-4 ${separateByFolder && row.startsNewFolder ? 'border-t-2 border-gray-300 dark:border-gray-600 pt-3' : ''}`}
+                >
                   {row.map((image, imageIndex) => {
                     const flatIndex = flatIndexBase + imageIndex;
                     const isSingleSelected = selectedImage?.id === image.id;

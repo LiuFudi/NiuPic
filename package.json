@@ -1,6 +1,6 @@
 {
   "name": "niupic",
-  "version": "2.1.0",
+  "version": "2.3.10",
   "private": true,
   "description": "牛图 NiuPic - 飞牛 fnOS 上的轻量、快速、稳定的图像素材检索浏览应用（基于 FlyPic 二次开发）",
   "keywords": [
@@ -17,7 +17,7 @@
   "contributors": [
     "ZangXincz <https://github.com/ZangXincz> (FlyPic 原作者)"
   ],
-  "license": "MIT",
+  "license": "GPL-3.0-or-later",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/LiuFudi/NiuPic.git"
@@ -31,6 +31,7 @@
     "backend"
   ],
   "scripts": {
+    "check:spdx": "node scripts/check-spdx.js",
     "dev:frontend": "npm --workspace frontend run dev",
     "dev:backend": "npm --workspace backend run dev",
     "dev": "npm run dev:backend",

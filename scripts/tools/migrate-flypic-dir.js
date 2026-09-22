@@ -1,4 +1,11 @@
 #!/usr/bin/env node
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 LiuFudi
+//
+// This file is part of NiuPic, licensed under the GNU General Public
+// License version 3 or (at your option) any later version.
+// See the LICENSE file for the full text.
+
 /**
  * 把素材库里的旧索引目录 .flypic 就地迁移成 .niupic
  *
@@ -6,7 +13,7 @@
  * 跑一次这个脚本就不用重新扫描、不用重建缩略图（否则大库可能要几小时）。
  *
  * 用法（在 NAS 上以 root 执行）：
- *   node /vol3/@appcenter/niupic/server/scripts/migrate-flypic-dir.js /vol3/1000/色图
+ *   node /vol1/@appcenter/niupic/server/scripts/migrate-flypic-dir.js /vol1/1000/Photos
  *   可以一次传多个素材库路径
  *
  * 做的事：

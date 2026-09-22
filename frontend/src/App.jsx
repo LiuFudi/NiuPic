@@ -1,3 +1,10 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 LiuFudi
+//
+// This file is part of NiuPic, licensed under the GNU General Public
+// License version 3 or (at your option) any later version.
+// See the LICENSE file for the full text.
+
 import { useEffect, useState, useRef } from 'react';
 import { io } from 'socket.io-client';
 import { useUIStore } from './stores/useUIStore';
@@ -8,20 +15,27 @@ import { useTheme } from './hooks/useTheme';
 import { libraryAPI, imageAPI, scanAPI } from './api';
 import domCleanup from './utils/domCleanup';
 import { normalizeHex, isDefaultAccent } from './utils/accentColor';
+import { buildImageQueryParams } from './utils/imageQuery';
 import Sidebar from './components/Sidebar';
 import MainContent from './components/MainContent';
 import RightPanel from './components/RightPanel';
+import PanelResizeHandle from './components/PanelResizeHandle';
 import Header from './components/Header';
+import FilterSortPanel from './components/FilterSortPanel';
 import LibraryMissingModal from './components/LibraryMissingModal';
 import { createLogger } from './utils/logger';
 
 const logger = createLogger('App');
 
+/** 面板默认宽度（双击把手复位用，与 256px=w-64 / 320px=w-80 对齐） */
+const DEFAULT_LEFT_WIDTH = 256;
+const DEFAULT_RIGHT_WIDTH = 320;
+
 function App() {
   // 使用统一的主题管理 Hook
   useTheme();
   
-  const { mobileView, setMobileView } = useUIStore();
+  const { mobileView, setMobileView, activePanel } = useUIStore();
   const { 
     setLibraries, 
     setCurrentLibrary, 
@@ -31,8 +45,8 @@ function App() {
   } = useLibraryStore();
   const { selectedImage } = useImageStore();
   const { setScanProgress } = useScanStore();
-  const [leftWidth, setLeftWidth] = useState(256); // 默认 256px (w-64)
-  const [rightWidth, setRightWidth] = useState(320); // 默认 320px (w-80)
+  const [leftWidth, setLeftWidth] = useState(DEFAULT_LEFT_WIDTH);
+  const [rightWidth, setRightWidth] = useState(DEFAULT_RIGHT_WIDTH);
   const [isDraggingLeft, setIsDraggingLeft] = useState(false);
   const [isDraggingRight, setIsDraggingRight] = useState(false);
   const [isMobile, setIsMobile] = useState(false);
@@ -108,49 +122,69 @@ function App() {
       }
     });
 
-    socket.on('scanComplete', ({ libraryId, results }) => {
+    socket.on('scanComplete', ({ libraryId, results, stats }) => {
       const currentLibId = useLibraryStore.getState().currentLibraryId;
 
-      if (libraryId === currentLibId) {
-
-        // 获取当前的筛选条件
-        const imageState = useImageStore.getState();
-        const params = {
-          keywords: imageState.searchKeywords,
-          ...imageState.filters
-        };
-
-        // 只有选中了文件夹才添加 folder 参数
-        if (imageState.selectedFolder) {
-          params.folder = imageState.selectedFolder;
-        }
-
-        // 并行加载文件夹、图片和统计信息
-        Promise.all([
-          imageAPI.getFolders(libraryId),
-          // 如果没有选中文件夹且没有搜索条件，不加载图片（保持在 Dashboard）
-          (imageState.selectedFolder || imageState.searchKeywords || imageState.filters.formats.length > 0)
-            ? imageAPI.search(libraryId, params)
-            : Promise.resolve({ images: [] }),
-          // 扫描完成后重新获取统计信息（包含 totalSize）
-          imageAPI.getStats(libraryId)
-        ]).then(([foldersRes, imagesRes, statsRes]) => {
-          useImageStore.getState().setFolders(foldersRes.folders);
-          useImageStore.getState().setImages(imagesRes.images);
-          useImageStore.getState().setTotalImageCount(statsRes.total || 0);
-          useImageStore.getState().setTotalSize(statsRes.totalSize || 0);
-        }).catch(err => {
-          logger.error('扫描完成后加载数据失败:', err.message);
-        }).finally(() => {
-          setScanProgress(null);
-        });
-      } else {
-        setScanProgress(null);
+      // 扫描结果里最关键的一个数字是"找到多少个文件"：
+      // 0 说明目录没读到东西（权限/路径），要直接告诉用户，不能只说"扫描完成"。
+      const summary = stats || results;
+      if (summary && typeof summary.total === 'number') {
+        useScanStore.getState().setLastScanResult({ libraryId, ...summary });
       }
+
+      if (libraryId !== currentLibId) {
+        setScanProgress(null);
+        return;
+      }
+
+      // 扫描结束之后把当前视图重新拉一遍。
+      //
+      // 这里原来有个"Dashboard 分支"：如果没选文件夹、没搜索、没格式筛选，就
+      // `setImages([])`（当时的想法是"保持在 Dashboard 不加载图片"）。问题是
+      // **扫描随时可能结束** —— 文件监控（lightweightWatcher）发现新文件就会自己跑一次
+      // 增量同步，然后广播 scanComplete。于是用户在"全部图片"下看图时，
+      // 后台一次扫描完成就把网格清空了，界面上就是「图片短暂显示 → 暂无图片」；
+      // 点一下文件夹（走另一条加载路径）或者刷新页面又好了。
+      //
+      // 现在：只要当前有素材库，就按**和首屏完全一样**的参数重新加载第一页。
+      const imageState = useImageStore.getState();
+      const params = buildImageQueryParams({
+        folder: imageState.selectedFolder,
+        keywords: imageState.searchKeywords,
+        filters: imageState.filters,
+        sort: imageState.sort,
+        offset: 0,
+        limit: 100,
+      });
+
+      Promise.all([
+        imageAPI.getFolders(libraryId),
+        imageAPI.search(libraryId, params),
+        // 扫描完成后重新获取统计信息（包含 totalSize）
+        imageAPI.getStats(libraryId)
+      ]).then(([foldersRes, imagesRes, statsRes]) => {
+        const fresh = useImageStore.getState();
+        fresh.setFolders(foldersRes.folders);
+        fresh.setImages(imagesRes.images);
+        fresh.setOriginalImages(imagesRes.images);
+        fresh.setTotalImageCount(statsRes.total || 0);
+        fresh.setTotalSize(statsRes.totalSize || 0);
+        fresh.setImageLoadingState({
+          isLoading: false,
+          loadedCount: (imagesRes.images || []).length,
+          totalCount: imagesRes.total || 0,
+          hasMore: imagesRes.hasMore || false,
+        });
+      }).catch(err => {
+        logger.error('扫描完成后加载数据失败:', err.message);
+      }).finally(() => {
+        setScanProgress(null);
+      });
     });
 
     socket.on('scanError', ({ libraryId, error }) => {
       setScanProgress(null);
+      useScanStore.getState().setLastScanError(error || '扫描失败');
       logger.error('扫描错误:', error);
     });
 
@@ -207,10 +241,12 @@ function App() {
         useUIStore.getState().setAccentColor(savedAccent);
       }
       if (data.preferences) {
-        const { thumbnailHeight, leftPanelWidth, rightPanelWidth } = data.preferences;
+        const { thumbnailHeight, leftPanelWidth, rightPanelWidth, rowGap, separateByFolder } = data.preferences;
         if (thumbnailHeight) useUIStore.getState().setThumbnailHeight(thumbnailHeight);
         if (leftPanelWidth) setLeftWidth(leftPanelWidth);
         if (rightPanelWidth) setRightWidth(rightPanelWidth);
+        if (rowGap !== undefined) useUIStore.getState().setRowGap(rowGap);
+        if (separateByFolder !== undefined) useUIStore.getState().setSeparateByFolder(separateByFolder);
       }
 
       if (libId) {
@@ -293,6 +329,17 @@ function App() {
     } catch (error) {
       logger.error('保存面板宽度失败:', error.message);
     }
+  };
+
+  // 双击把手恢复默认宽度
+  const resetLeftWidth = () => {
+    setLeftWidth(DEFAULT_LEFT_WIDTH);
+    savePanelWidths(DEFAULT_LEFT_WIDTH, rightWidth);
+  };
+
+  const resetRightWidth = () => {
+    setRightWidth(DEFAULT_RIGHT_WIDTH);
+    savePanelWidths(leftWidth, DEFAULT_RIGHT_WIDTH);
   };
 
   // 处理鼠标拖动（极致性能优化 + RAF 批处理）
@@ -589,10 +636,10 @@ function App() {
           <Sidebar />
         </div>
 
-        {/* 左侧拖动条 */}
-        <div
-          className={`group relative w-1 h-full cursor-col-resize flex-shrink-0 transition-colors ${isDraggingLeft ? 'bg-blue-500' : 'bg-gray-200 dark:bg-gray-700 hover:bg-blue-400'
-            }`}
+        {/* 左侧分界线 + 顶部拖拽把手（只有按住把手才能调宽度） */}
+        <PanelResizeHandle
+          side="left"
+          active={isDraggingLeft}
           onMouseDown={(e) => {
             e.preventDefault();
             // 标记正在拖动，供其他组件抑制重算
@@ -600,31 +647,36 @@ function App() {
             useUIStore.getState().setResizingSide('left');
             setIsDraggingLeft(true);
           }}
-        >
-          {/* 扩大点击区域 */}
-          <div className="absolute inset-y-0 -left-2 -right-2 w-5" />
+          onReset={resetLeftWidth}
+        />
+
+        {/* 中间主内容区。
+            筛选/排序、主题色这两张卡片画在这里（不是画在顶栏里）——
+            画在顶栏里的话卡片一展开，整行内容都被压矮，左右两个侧栏也跟着变短；
+            画在这里就只挤图片区，两侧边栏高度纹丝不动。 */}
+        <div className="flex-1 min-w-0 h-full flex flex-col">
+          {/* 筛选/排序卡片（里面也含主题色）。画在图片区这一列里，
+              所以只挤图片区，左右两侧边栏的高度完全不受影响。 */}
+          {activePanel && (
+            <FilterSortPanel className="px-3 pt-3" horizontal />
+          )}
+          <div className="flex-1 min-h-0">
+            <MainContent />
+          </div>
         </div>
 
-        {/* 中间主内容区 */}
-        <div className="flex-1 min-w-0 h-full">
-          <MainContent />
-        </div>
-
-        {/* 右侧拖动条 */}
-        <div
-          className={`group relative w-1 h-full cursor-col-resize flex-shrink-0 transition-colors ${isDraggingRight ? 'bg-blue-500' : 'bg-gray-200 dark:bg-gray-700 hover:bg-blue-400'
-            }`}
+        {/* 右侧分界线 + 顶部拖拽把手 */}
+        <PanelResizeHandle
+          side="right"
+          active={isDraggingRight}
           onMouseDown={(e) => {
             e.preventDefault();
-            // 标记正在拖动，供其他组件抑制重算
             useUIStore.getState().setIsResizingPanels(true);
             useUIStore.getState().setResizingSide('right');
             setIsDraggingRight(true);
           }}
-        >
-          {/* 扩大点击区域 */}
-          <div className="absolute inset-y-0 -left-2 -right-2 w-5" />
-        </div>
+          onReset={resetRightWidth}
+        />
 
         {/* 右侧边栏 */}
         <div id="right-panel" style={{ width: `${rightWidth}px` }} className="flex-shrink-0 h-full bg-white dark:bg-gray-800">

@@ -1,4 +1,11 @@
 #!/bin/bash
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 LiuFudi
+#
+# This file is part of NiuPic, licensed under the GNU General Public
+# License version 3 or (at your option) any later version.
+# See the LICENSE file for the full text.
+
 LOG="${TRIM_TEMP_LOGFILE:-/tmp/niupic_install.log}"
 exec >> "$LOG" 2>&1
 set -x
@@ -27,6 +34,23 @@ fi
 
 # 保存端口配置供 main 脚本使用
 echo "APP_PORT=${APP_PORT}" > "${TRIM_PKGVAR}/port.conf"
+
+# ---- 配置恢复 ----
+# 更新版本时，飞牛会先跑一遍旧版本的卸载流程。老版本的卸载脚本会删 config.json，
+# 那份配置里装着素材库列表、访问密码、主题色等，删了就得从头配一遍。
+# 新版本的卸载脚本已经改成默认保留，这里再补一道保险：
+# 只要 config.json 不在了、而备份还在，就自动恢复。
+CONFIG_FILE="${TRIM_PKGVAR}/config.json"
+CONFIG_BAK="${TRIM_PKGVAR}/config.json.bak"
+if [ ! -f "$CONFIG_FILE" ] && [ -f "$CONFIG_BAK" ]; then
+    if cp "$CONFIG_BAK" "$CONFIG_FILE" 2>/dev/null; then
+        echo "已从备份恢复配置: ${CONFIG_BAK} -> ${CONFIG_FILE}"
+    else
+        echo "⚠️  配置恢复失败（备份文件不可读或没有写权限）"
+    fi
+elif [ -f "$CONFIG_FILE" ]; then
+    echo "配置已存在，保持不动: ${CONFIG_FILE}"
+fi
 
 echo "=== 安装初始化完成 ==="
 

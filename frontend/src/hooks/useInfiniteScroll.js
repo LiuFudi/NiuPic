@@ -1,3 +1,10 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 LiuFudi
+//
+// This file is part of NiuPic, licensed under the GNU General Public
+// License version 3 or (at your option) any later version.
+// See the LICENSE file for the full text.
+
 /**
  * 无限滚动 Hook
  */
@@ -7,6 +14,7 @@ import { useImageStore } from '../stores/useImageStore';
 import { useLibraryStore } from '../stores/useLibraryStore';
 import { imageAPI } from '../api';
 import requestManager, { RequestType } from '../services/requestManager';
+import { buildImageQueryParams } from '../utils/imageQuery';
 import { createLogger } from '../utils/logger';
 
 const logger = createLogger('useInfiniteScroll');
@@ -30,6 +38,7 @@ export const useInfiniteScroll = () => {
     selectedFolder,
     searchKeywords,
     filters,
+    sort,
     appendImages 
   } = useImageStore();
 
@@ -45,13 +54,17 @@ export const useInfiniteScroll = () => {
     setImageLoadingState({ isLoading: true });
 
     try {
-      const params = { 
+      // offset 用「当前已经拿到的条数」，不能用心跳之外的计数。
+      // 参数拼装统一走 buildImageQueryParams —— 之前这里手写了一份，
+      // 漏了 sort/order/seed，导致第二页开始排序就失效了。
+      const params = buildImageQueryParams({
+        folder: selectedFolder,
+        keywords: searchKeywords,
+        filters,
+        sort,
         offset: images.length,
-        limit: LOAD_CONFIG.pageSize 
-      };
-      if (selectedFolder) params.folder = selectedFolder;
-      if (searchKeywords) params.keywords = searchKeywords;
-      if (filters.formats?.length > 0) params.formats = filters.formats.join(',');
+        limit: LOAD_CONFIG.pageSize,
+      });
 
       const response = await imageAPI.search(currentLibraryId, params, {
         signal: requestContext.signal
@@ -86,6 +99,7 @@ export const useInfiniteScroll = () => {
     selectedFolder, 
     searchKeywords, 
     filters, 
+    sort,
     appendImages, 
     setImageLoadingState
   ]);

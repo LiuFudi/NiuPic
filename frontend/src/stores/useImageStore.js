@@ -1,3 +1,10 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 LiuFudi
+//
+// This file is part of NiuPic, licensed under the GNU General Public
+// License version 3 or (at your option) any later version.
+// See the LICENSE file for the full text.
+
 /**
  * 图片状态管理
  * 简化版：只做向下无限滚动，依赖浏览器原生懒加载管理内存
@@ -24,7 +31,8 @@ export const SORT_OPTIONS = [
   { field: 'width',      label: '宽度',       hint: '按图片宽度' },
   { field: 'height',     label: '高度',       hint: '按图片高度' },
   { field: 'aspect',     label: '宽高比',     hint: '宽幅 / 全景图排前面' },
-  { field: 'format',     label: '格式',       hint: 'jpg / png / webp …' },
+  // 「格式」原本也在这里（jpg / png / webp …），和「文件类型」是一回事，已去掉。
+  // 别再加回来：老偏好里如果存着 format，loadSortPref() 会自动退回默认排序。
   { field: 'type',       label: '文件类型',   hint: '图片 / 视频 / 文档 …' },
   { field: 'rating',     label: '评分',       hint: '按星级' },
   { field: 'favorite',   label: '收藏',       hint: '收藏的排前面' },
@@ -47,9 +55,15 @@ export function loadSortPref() {
     if (!raw) return { ...DEFAULT_SORT };
     const parsed = JSON.parse(raw);
     if (!parsed || typeof parsed !== 'object') return { ...DEFAULT_SORT };
+
     const known = SORT_OPTIONS.some((o) => o.field === parsed.field);
+    // 字段没了（比如「格式」下线了）就连方向一起重置：
+    // 原来存的方向是配那个字段的，硬留下来会变成「创建时间 升序」——
+    // 用户看到的是最老的照片排在最前面，比退回默认值更莫名其妙
+    if (!known) return { ...DEFAULT_SORT };
+
     return {
-      field: known ? parsed.field : DEFAULT_SORT.field,
+      field: parsed.field,
       order: parsed.order === 'asc' || parsed.order === 'desc' ? parsed.order : DEFAULT_SORT.order,
       seed: Number.isFinite(Number(parsed.seed)) ? Math.floor(Number(parsed.seed)) : 0,
     };
@@ -81,11 +95,16 @@ export const useImageStore = create((set, get) => ({
   
   // 搜索和过滤
   searchKeywords: '',
+  // 筛选条件（全部在后端 SQL 里生效，前端不再本地筛已加载的那一页）
+  //   mode        —— 'include' 命中留下 / 'exclude' 命中剔除
+  //   minSize/maxSize —— 文件大小区间，单位**字节**（null = 不限）
   filters: {
+    mode: 'include',
     formats: [],
-    sizes: [],           // 文件大小范围筛选
-    orientations: [],    // 图片方向筛选（多选）: ['horizontal', 'vertical', 'square']
-    ratings: [],         // 评分筛选（多选）: [0, 1, 2, 3, 4, 5]
+    minSize: null,
+    maxSize: null,
+    orientations: [],    // ['horizontal', 'vertical', 'square']
+    ratings: [],         // [0, 1, 2, 3, 4, 5]
   },
   
   // 排序偏好（跨层级、跨刷新保留，不随 filters 一起重置）
@@ -180,12 +199,67 @@ export const useImageStore = create((set, get) => ({
   setFilters: (filters) => set((state) => ({ 
     filters: { ...state.filters, ...filters } 
   })),
+
+  // ---------- 筛选动作 ----------
+  // 全部收敛到这几个 action 里：面板、快捷键、以后别的地方都调同一份，
+  // 避免"button 里算一遍、别处又算一遍"这种两处逻辑不一致的老问题。
+  // 注意每次都要造新对象 —— MainContent 监听 filters 变化来重新向后端请求。
+
+  // 筛选模式：'include' 命中留下 / 'exclude' 命中剔除
+  setFilterMode: (mode) => set((state) => ({
+    filters: { ...state.filters, mode: mode === 'exclude' ? 'exclude' : 'include' }
+  })),
+
+  toggleFilterValue: (key, value) => set((state) => {
+    const list = state.filters[key] || [];
+    const next = list.includes(value)
+      ? list.filter((v) => v !== value)
+      : [...list, value];
+    return { filters: { ...state.filters, [key]: next } };
+  }),
+
+  // 一键切换一组值（格式那一栏的「图片 / 视频 / 其他」组头用）：
+  // 整组都选中了就整组取消，否则整组补上。
+  toggleFilterValues: (key, values = []) => set((state) => {
+    const list = state.filters[key] || [];
+    const allIn = values.length > 0 && values.every((v) => list.includes(v));
+    const next = allIn
+      ? list.filter((v) => !values.includes(v))
+      : [...list, ...values.filter((v) => !list.includes(v))];
+    return { filters: { ...state.filters, [key]: next } };
+  }),
+
+  // 文件大小：区间（两个把手），单位字节。null = 这一端不限。
+  // 挡位表在后端 constants.SIZE_BRACKETS（唯一定义处），前端把两个把手所在的挡位
+  // 翻译成 minSize / maxSize 两个搜索参数（两端都放开就是 null / null = 不限）。
+  setSizeRange: ({ minSize = null, maxSize = null } = {}) => set((state) => ({
+    filters: {
+      ...state.filters,
+      minSize: Number.isFinite(minSize) ? minSize : null,
+      maxSize: Number.isFinite(maxSize) ? maxSize : null,
+    }
+  })),
+
+  // 清空具体条件（模式也回到默认：排除了半天什么都没选，视图却还挂着"排除"没有意义）
+  clearFilters: () => set((state) => ({
+    filters: {
+      ...state.filters,
+      mode: 'include',
+      formats: [],
+      minSize: null,
+      maxSize: null,
+      orientations: [],
+      ratings: [],
+    }
+  })),
   
   resetFilters: () => set({
     searchKeywords: '',
     filters: {
+      mode: 'include',
       formats: [],
-      sizes: [],
+      minSize: null,
+      maxSize: null,
       orientations: [],
       ratings: []
     }

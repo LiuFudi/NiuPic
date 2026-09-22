@@ -1,0 +1,25 @@
+# 赞助支持
+#
+# 本文件让 GitHub 仓库页显示 "Sponsor" 按钮。
+# 只填了作者本人账号，未启用 / 未配置的平台不会渲染按钮，留着也不会报错。
+# 想加别的渠道，取消对应行注释并按官方文档填：
+# https://docs.github.com/repositories/managing-your-repositorys-settings-and-features/customizing-your-repository/displaying-a-sponsor-button-in-your-repository
+
+github: [LiuFudi]
+
+# patreon:      # 用户名
+# open_collective:  # 项目名
+# ko_fi:        # 用户名
+# tidelift:     # 平台/包名
+# community_bridge: # 项目名
+# liberapay:    # 用户名
+# issuehunt:    # 用户名
+# otechie:      # 用户名
+# lfx_crowdfunding: # 项目名
+# polar:        # 用户名
+# buy_me_a_coffee:  # 用户名
+# thanks_dev:   # 用户名
+# custom: ["https://example.com/donate"]   # 最多 4 个自定义链接
+
+# 说明：牛图 NiuPic 是免费开源软件，赞助完全自愿，不影响功能与支持力度。
+# 不接受附带条件的赞助（例如要求优先处理某个需求、或要求闭源授权）。

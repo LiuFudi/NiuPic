@@ -1,3 +1,10 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 LiuFudi
+//
+// This file is part of NiuPic, licensed under the GNU General Public
+// License version 3 or (at your option) any later version.
+// See the LICENSE file for the full text.
+
 /**
  * 应用常量配置
  */
@@ -18,6 +25,27 @@ module.exports = {
     SHARD_LENGTH: 2  // 分片目录长度
   },
   
+  // 文件大小筛选的固定挡位（MB）
+  //
+  // 为什么不给滑块：素材库里的文件大小跨度动辄 200 倍（100KB ~ 20MB），
+  // 滑块要么对数刻度（用户看不懂"为什么中间是 2MB"），要么线性（小文件全挤在最左边拖不动）。
+  // 固定挡位是"能用眼睛选"的东西 —— 这和 PornHub 的时长筛选是同一个思路。
+  //
+  // 边界语义：挡位的统计口径是 [minSize, maxSize)，也就是每张图只算进一个挡位、
+  // 各挡位计数之和 = 总数；发给搜索接口的是闭区间 [minSize, maxSize]，
+  // 正好卡在边界上的文件（例如恰好 5MB）会同时出现在相邻两个挡位里。
+  SIZE_BRACKETS: [
+    { key: 'lt1',     label: '< 1 MB',      minSize: null, maxSize: 1 },
+    { key: '1-5',     label: '1 - 5 MB',    minSize: 1,    maxSize: 5 },
+    { key: '5-10',    label: '5 - 10 MB',   minSize: 5,    maxSize: 10 },
+    { key: '10-20',   label: '10 - 20 MB',  minSize: 10,   maxSize: 20 },
+    { key: '20-40',   label: '20 - 40 MB',  minSize: 20,   maxSize: 40 },
+    { key: '40-60',   label: '40 - 60 MB',  minSize: 40,   maxSize: 60 },
+    { key: '60-80',   label: '60 - 80 MB',  minSize: 60,   maxSize: 80 },
+    { key: '80-100',  label: '80 - 100 MB', minSize: 80,   maxSize: 100 },
+    { key: 'gt100',   label: '100 MB 以上', minSize: 100,  maxSize: null }
+  ],
+
   // 分页配置
   PAGINATION: {
     DEFAULT_SIZE: 100,
@@ -77,6 +105,7 @@ module.exports = {
   // 缩略图生成配置
   THUMBNAIL_GENERATION: {
     TARGET_HEIGHT: 480,                  // 目标高度
+    TARGET_WIDTH: 640,                   // 目标宽度（视频封面/占位图用）
     MAX_QUALITY: 95,                     // 最高质量
     DEFAULT_QUALITY: 92,                 // 默认质量
     EFFORT: 4,                           // WebP编码努力程度
@@ -107,7 +136,8 @@ module.exports = {
       width:      { label: '宽度',       sql: ['width'] },
       height:     { label: '高度',       sql: ['height'] },
       aspect:     { label: '宽高比',     sql: ['(CAST(width AS REAL) / NULLIF(height, 0))'] },
-      format:     { label: '格式',       sql: ['format'] },
+      // 「格式」原本也在这里，和「文件类型」重复，已去掉（前端 SORT_OPTIONS 同步移除）。
+      // 老客户端如果还传 sort=format，_buildOrderBy 会退回 DEFAULT_FIELD，不会报错。
       type:       { label: '文件类型',   sql: ['file_type'] },
       rating:     { label: '评分',       sql: ['rating'] },
       favorite:   { label: '收藏',       sql: ['favorite'] },

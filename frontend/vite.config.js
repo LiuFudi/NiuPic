@@ -1,8 +1,27 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 LiuFudi
+//
+// This file is part of NiuPic, licensed under the GNU General Public
+// License version 3 or (at your option) any later version.
+// See the LICENSE file for the full text.
+
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
+import { readFileSync } from 'node:fs'
+import { fileURLToPath } from 'node:url'
+import { dirname, resolve } from 'node:path'
+
+// 应用版本号的真源是仓库根 package.json（打包脚本会交叉校验它与 niupic/manifest、
+// CHANGELOG 三处一致）。前端不另存一份常量，否则会出现"界面显示 2.3.9、装的是 2.3.10"。
+const rootPkg = JSON.parse(
+  readFileSync(resolve(dirname(fileURLToPath(import.meta.url)), '..', 'package.json'), 'utf8'),
+)
 
 export default defineConfig({
   plugins: [react()],
+  define: {
+    __APP_VERSION__: JSON.stringify(rootPkg.version),
+  },
   server: {
     port: 5173,
     proxy: {

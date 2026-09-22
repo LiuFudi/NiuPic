@@ -1,6 +1,12 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 LiuFudi
+//
+// This file is part of NiuPic, licensed under the GNU General Public
+// License version 3 or (at your option) any later version.
+// See the LICENSE file for the full text.
+
 const fs = require('fs');
 const path = require('path');
-const { glob } = require('glob');
 const {
   isImageFile,
   getFileType,
@@ -14,17 +20,83 @@ const scanManager = require('./scanManager');
 const { constants } = require('../src/config');
 const logger = require('../src/utils/logger');
 
+// 遍历时永远跳过的目录名：应用自己的索引/缩略图目录，以及依赖目录
+const SKIP_DIRS = new Set(['.niupic', '.flypic', 'node_modules']);
+
 /**
- * Get all image files in a directory
+ * 扫描时遇到读不了的目录，抛这个错（带上路径，便于界面直接告诉用户怎么办）
+ */
+class ScanPathError extends Error {
+  constructor(message, dirPath) {
+    super(message);
+    this.name = 'ScanPathError';
+    this.dirPath = dirPath;
+  }
+}
+
+/**
+ * 列出素材库里的所有文件（递归）
+ *
+ * 为什么不用 glob：
+ *   FlyPic 时代这里用的是 `glob('**\/*.*', { nocase: true })`，
+ *   而 `nocase: true` 会让 glob 在 **btrfs**（飞牛的数据盘就是 btrfs）上一个文件都匹配不到 ——
+ *   连"路径完全正确、文件确实存在"的情况也返回空数组。实测：
+ *
+ *     glob('/vol1/.../frontend/src/**\/*.js', { nodir: true })              → 47 个
+ *     glob('/vol1/.../frontend/src/**\/*.js', { nodir: true, nocase: true }) →  0 个
+ *     glob('/vol1/.../package.json',           { nocase: true })             →  0 个（文件明明存在）
+ *     同样的调用放在 ext4/tmpfs 上（/tmp）却是好的
+ *
+ *   于是"扫描完成，0 个文件"，用户看到的是空空如也的库 —— 路径里带大写字母的库
+ *   （例如 `Photos-Backup/Camera`）就是这么中招的；有些库是老版本入库的，所以看着没事。
+ *   `nocase` 本来就是给 Windows/macOS 准备的（Linux 上大小写敏感，扩展名大小写
+ *   由 `*.*` 这类匹配天然覆盖），所以这里改成自己用 readdir 走一遍：
+ *   行为确定、不依赖 glob 的大小写匹配，还能顺手统计"到底看见了多少东西"。
+ *
+ * @param {string} libraryPath 素材库根目录
+ * @returns {Promise<string[]>} 文件绝对路径（顺序稳定：按目录名排序深度优先）
  */
 async function getAllImageFiles(libraryPath) {
-  // 支持所有文件格式（使用通配符 *.*）
-  const pattern = path.join(libraryPath, '**', '*.*').replace(/\\/g, '/');
-  const files = await glob(pattern, {
-    nodir: true,
-    nocase: true, // 大小写不敏感（Windows/macOS）
-    ignore: ['**/.flypic/**', '**/.niupic/**', '**/node_modules/**']
-  });
+  const files = [];
+  const pending = [libraryPath];
+
+  while (pending.length > 0) {
+    const dir = pending.pop();
+
+    let entries;
+    try {
+      entries = fs.readdirSync(dir, { withFileTypes: true });
+    } catch (error) {
+      // 根目录读不了 = 整个扫描没意义，直接抛出可读的错误；
+      // 子目录读不了就跳过并记日志（一个子目录没权限不该让整个库扫不了）
+      if (dir === libraryPath) {
+        const hint = error.code === 'EACCES' || error.code === 'EPERM'
+          ? '没有读取权限，请在「应用中心 → NiuPic → 应用设置 → 可访问文件夹」里给它授权'
+          : error.message;
+        throw new ScanPathError(`无法读取素材库目录：${dir}（${hint}）`, dir);
+      }
+      logger.warn(`跳过无法读取的目录 ${dir}: ${error.code || error.message}`);
+      continue;
+    }
+
+    for (const entry of entries) {
+      const full = path.join(dir, entry.name);
+      if (entry.isDirectory()) {
+        if (SKIP_DIRS.has(entry.name)) continue;
+        pending.push(full);
+      } else if (entry.isSymbolicLink()) {
+        // 符号链接：指向文件的（且目标还在）才算，避免链接成环时无限递归
+        try {
+          if (fs.statSync(full).isFile()) files.push(full);
+        } catch {
+          /* 断链，忽略 */
+        }
+      } else if (entry.isFile()) {
+        files.push(full);
+      }
+    }
+  }
+
   return files;
 }
 
@@ -259,7 +331,10 @@ async function repairStoredDimensions(imagePath, existing, db) {
   }
 }
 
-async function processImage(imagePath, libraryPath, db, dryRun = false) {
+async function processImage(imagePath, libraryPath, db, dryRun = false, options = {}) {
+  // force = 全量重扫：即使哈希没变也重新读元数据、重算 name_sort，
+  // 用于「在磁盘上重新整理过文件、想让库里跟着更新」的场景。
+  const force = options.force === true;
   const processStartTime = Date.now();
   const stepTimes = {}; // 记录每个步骤的耗时
   
@@ -299,8 +374,8 @@ async function processImage(imagePath, libraryPath, db, dryRun = false) {
       }
     }
 
-    // Skip only if unchanged and thumbnails are up-to-date
-    if (existing && existing.file_hash === currentHash && !needRegenThumbs) {
+    // Skip only if unchanged and thumbnails are up-to-date（force 时一律重跑）
+    if (!force && existing && existing.file_hash === currentHash && !needRegenThumbs) {
       // 老库里 width/height 可能存的是缩略图尺寸，这里顺手纠正一次。
       // 只读文件头，比上面算 hash 的全文件读取便宜得多；只有真不一致时才写库。
       await repairStoredDimensions(imagePath, existing, db);
@@ -330,7 +405,12 @@ async function processImage(imagePath, libraryPath, db, dryRun = false) {
     //   真实图片：用原图像素（缩略图只是 480p 的展示副本，绝不能当原图尺寸——
     //            否则前端「100%」、适应全屏的缩放比例全都会按缩略图算）
     //   视频 / PSD / 其它：原文件本来就没有可解码的像素，只能沿用封面/占位图尺寸
-    const useOriginalDims = fileType === 'image' && metadata.width && metadata.height;
+    // 图片和视频都用**真实**宽高：
+    //   · 图片来自 sharp，视频来自 ffprobe（见 getImageMetadata）
+    //   · 以前只有 image 走这条路，视频/PSD 一律用缩略图尺寸当宽高 ——
+    //     于是所有视频都被当成 640×480，16:9 的片子在网格里比例是错的
+    const useOriginalDims = (fileType === 'image' || fileType === 'video')
+      && metadata.width && metadata.height;
     const actualWidth = useOriginalDims ? metadata.width : (thumbnails.width || metadata.width);
     const actualHeight = useOriginalDims ? metadata.height : (thumbnails.height || metadata.height);
 
@@ -435,6 +515,7 @@ async function scanLibrary(libraryPath, db, onProgress, libraryId = null, resume
     }
 
     const results = {
+      total,          // 目录里一共找到多少个文件（0 就是真的一个都没找到，界面要如实说）
       processed: 0,
       skipped: 0,
       errors: 0,
@@ -555,7 +636,13 @@ async function scanLibrary(libraryPath, db, onProgress, libraryId = null, resume
     }
 
     const totalTime = (Date.now() - startTime) / 1000;
-    logger.info(`扫描完成: ${total} 个文件 (${totalTime.toFixed(1)}秒, ${(total / totalTime).toFixed(1)} 张/秒)`);
+    logger.info(
+      `扫描完成: 找到 ${total} 个文件，处理 ${results.processed}，跳过 ${results.skipped}，失败 ${results.errors} ` +
+      `(${totalTime.toFixed(1)}秒)`
+    );
+    if (total === 0) {
+      logger.warn(`素材库目录里没有找到任何文件：${libraryPath}`);
+    }
 
     // Update folder image counts
     db.updateAllFolderCounts();
@@ -584,6 +671,47 @@ async function scanLibrary(libraryPath, db, onProgress, libraryId = null, resume
 }
 
 /**
+ * 只修文件夹结构与计数（不读磁盘上的图片，秒级完成）
+ *
+ * 用途：文件夹列表显示 0 张、或者磁盘上挪过文件夹之后想对齐 ——
+ * 这种情况不需要重新读一遍图片（大库在机械硬盘上要半小时），
+ * 数据库里 `images.folder` 已经写清楚了每张图在哪个目录，直接照着它重建即可。
+ *
+ * @returns {{folders:number, images:number}}
+ */
+async function fixFolderPaths(libraryPath, db) {
+  const rows = db.db.prepare('SELECT DISTINCT folder FROM images').all();
+  const paths = new Set();
+
+  for (const row of rows) {
+    let current = (row.folder || '').replace(/\\/g, '/').replace(/^\/+|\/+$/g, '');
+    while (current) {
+      paths.add(current);
+      const idx = current.lastIndexOf('/');
+      current = idx > 0 ? current.slice(0, idx) : '';
+    }
+  }
+
+  const folders = [...paths].sort().map((p) => {
+    const idx = p.lastIndexOf('/');
+    return {
+      path: p,
+      parent_path: idx > 0 ? p.slice(0, idx) : '',
+      name: idx >= 0 ? p.slice(idx + 1) : p,
+      image_count: 0,
+    };
+  });
+
+  db.db.transaction((list) => list.forEach((f) => db.insertFolder(f)))(folders);
+  db.updateAllFolderCounts();
+
+  const images = db.db.prepare('SELECT COUNT(*) AS c FROM images').get();
+  logger.perf(`文件夹结构已按数据库重建: ${folders.length} 个（图片 ${images ? images.c : 0} 张，未读磁盘）`);
+
+  return { folders: folders.length, images: images ? images.c : 0 };
+}
+
+/**
  * Sync library (incremental scan)
  */
 async function syncLibrary(libraryPath, db, forceRebuildFolders = false, onProgress = null) {
@@ -608,7 +736,7 @@ async function syncLibrary(libraryPath, db, forceRebuildFolders = false, onProgr
     const toCheck = [...currentPaths].filter(p => dbPaths.has(p));
     let toDelete = [...dbPaths].filter(p => !currentPaths.has(p));
 
-    logger.perf(`同步: +${toAdd.length} 检查${toCheck.length} -${toDelete.length}`);
+    logger.perf(`同步: 看到 ${currentPaths.size} 个文件, 新增 ${toAdd.length} 检查 ${toCheck.length} 删除 ${toDelete.length}`);
 
     // 安全检查：如果要删除的文件数量超过数据库中文件的50%，可能是路径匹配问题
     const dbImageCount = dbPaths.size;
@@ -724,6 +852,10 @@ async function syncLibrary(libraryPath, db, forceRebuildFolders = false, onProgr
     clearSharpCache();
 
     return {
+      // total = 这次遍历一共看到多少个文件。
+      // 它单独有用：0 就是"目录里一个文件都没找到"（权限/路径问题），
+      // 而不是"文件都没变化"——两者以前从返回值上分不出来。
+      total: currentPaths.size,
       added: toAdd.length,
       modified: modifiedCount,
       deleted: toDelete.length
@@ -803,12 +935,159 @@ async function quickSync(libraryPath, db) {
   return { added: toAdd.length, deleted: toDelete.length };
 }
 
+/**
+ * 全量重扫：把库里的每个文件都重新读一遍
+ *
+ * 和 scanLibrary 的区别：
+ *   - scanLibrary 会跳过「哈希没变」的文件（增量，快）
+ *   - 这里 force=true，所有文件都重跑一遍元数据 / name_sort / 缺失的缩略图，
+ *     用于「在磁盘上重新整理过文件，想让数据库跟着更新」
+ *
+ * 评分、收藏、标签不会被清掉（insertImage 已经是保留用户数据的 upsert）。
+ *
+ * @param {string} libraryPath
+ * @param {object} db
+ * @param {function} [onProgress]
+ * @param {string|null} [libraryId]
+ * @param {object} [options] { prune: boolean } 是否清理磁盘上已不存在的记录
+ */
+async function rescanLibrary(libraryPath, db, onProgress = null, libraryId = null, options = {}) {
+  // skipUnchanged（默认开）：文件没变过就不重新读它。
+  //
+  // 为什么要有这个：全量重扫原本对**每个**文件都调 processImage(force) ——
+  // 重新读元数据 + 重新生成缩略图。相机库 15000 多张在机械硬盘上要跑 30 分钟以上，
+  // 而其中绝大多数根本没变过。
+  // 现在先用"大小 + 修改时间"的快速哈希比一下：
+  //   记录在、哈希没变、缩略图文件也在 → 直接跳过（不碰磁盘上的图片内容）
+  //   只要缩略图缺了，还是会补生成（用户库里那批 404 的封面就是这么补回来的）
+  // 传 { skipUnchanged: false } 才是"每个文件都硬重读一遍"。
+  const { prune = true, skipUnchanged = true } = options;
+  const startTime = Date.now();
+
+  const files = await getAllImageFiles(libraryPath);
+  const total = files.length;
+
+  if (libraryId) scanManager.startScan(libraryId, total, libraryPath);
+
+  const stats = { processed: 0, skipped: 0, errors: 0, removed: 0, total };
+  const writeBuffer = [];
+  const WRITE_BATCH_SIZE = constants.SCAN.WRITE_BATCH_SIZE;
+
+  const flush = () => {
+    if (writeBuffer.length === 0) return;
+    db.db.transaction((items) => {
+      for (const item of items) {
+        if (item.status === 'processed' && item.data) db.insertImage(item.data);
+      }
+    })(writeBuffer);
+    writeBuffer.length = 0;
+  };
+
+  for (let i = 0; i < files.length; i += 1) {
+    const file = files[i];
+    try {
+      if (skipUnchanged) {
+        const relativePath = path.relative(libraryPath, file).replace(/\\/g, '/');
+        const existing = db.getImageByPath(relativePath);
+        if (existing && existing.file_hash) {
+          const sameHash = existing.file_hash === calculateFileHash(file);
+          const thumbOk = existing.thumbnail_path
+            && fs.existsSync(path.join(libraryPath, existing.thumbnail_path));
+          if (sameHash && thumbOk) {
+            stats.skipped += 1;
+            if (onProgress && (i % 200 === 0 || i === files.length - 1)) {
+              onProgress({
+                total,
+                current: i + 1,
+                percent: total ? Math.round(((i + 1) / total) * 100) : 100,
+                currentFile: path.basename(file),
+              });
+            }
+            continue;
+          }
+        }
+      }
+
+      const result = await processImage(file, libraryPath, db, true, { force: true });
+      if (result && result.status === 'processed' && result.data) {
+        writeBuffer.push(result);
+        stats.processed += 1;
+      } else {
+        stats.skipped += 1;
+      }
+      if (writeBuffer.length >= WRITE_BATCH_SIZE) flush();
+    } catch (error) {
+      stats.errors += 1;
+      logger.warn(`重扫失败 ${file}: ${error.message}`);
+    }
+
+    if (onProgress && (i % 20 === 0 || i === files.length - 1)) {
+      onProgress({
+        total,
+        current: i + 1,
+        percent: total ? Math.round(((i + 1) / total) * 100) : 100,
+        currentFile: path.basename(file)
+      });
+    }
+  }
+  flush();
+
+  // 清理磁盘上已经不存在的记录
+  if (prune) {
+    const onDisk = new Set(
+      files.map((f) => path.relative(libraryPath, f).replace(/\\/g, '/'))
+    );
+    const dbPaths = [];
+    for (const row of db.db.prepare('SELECT path FROM images').iterate()) {
+      dbPaths.push((row.path || '').replace(/\\/g, '/'));
+    }
+    const missing = dbPaths.filter((p) => !onDisk.has(p));
+
+    // 护栏：一次删掉超过一半，多半是路径/权限出了问题，宁可不删
+    const tooMany = dbPaths.length > 0 && missing.length > dbPaths.length * 0.5 && missing.length > 10;
+    if (tooMany) {
+      logger.warn(`重扫清理被拦下：将删除 ${missing.length}/${dbPaths.length} 条，比例过高`);
+    } else {
+      const del = db.db.prepare('DELETE FROM images WHERE path = ?');
+      db.db.transaction((list) => list.forEach((p) => del.run(p)))(missing);
+      stats.removed = missing.length;
+    }
+  }
+
+  // 文件夹结构与计数重建
+  //
+  // 顺序很关键：insertFolder 是 INSERT OR REPLACE（撞 path 就删了重插），
+  // 所以新插进去的行 image_count 是 0 —— **必须在这里重新数一遍**。
+  // 之前这里少了 updateAllFolderCounts()，于是"全量重扫之后所有文件夹都显示 0 张"
+  // （总张数和图片都正常，只有文件夹列表是 0）。
+  try {
+    const folders = await getFolderStructure(libraryPath);
+    db.db.transaction((list) => list.forEach((f) => db.insertFolder(f)))(folders);
+    db.updateAllFolderCounts();
+    logger.perf(`文件夹结构重建完成: ${folders.length} 个，计数已刷新`);
+  } catch (error) {
+    logger.warn(`重扫重建文件夹结构失败: ${error.message}`);
+  }
+
+  if (libraryId) scanManager.completeScan(libraryId, stats);
+
+  logger.perf(
+    `全量重扫完成: ${stats.processed} 更新 / ${stats.skipped} 跳过（没变过） / ${stats.removed} 清理 / ${stats.errors} 失败 ` +
+    `(${((Date.now() - startTime) / 1000).toFixed(1)}s)`
+  );
+
+  return stats;
+}
+
 module.exports = {
+  ScanPathError,
+  fixFolderPaths,
   getAllImageFiles,
   getFolderStructure,
   processImage,
   scanLibrary,
   syncLibrary,
+  rescanLibrary,
   quickSync,
   applyChangesFromEvents
 };

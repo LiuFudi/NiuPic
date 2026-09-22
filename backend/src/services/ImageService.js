@@ -1,3 +1,10 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 LiuFudi
+//
+// This file is part of NiuPic, licensed under the GNU General Public
+// License version 3 or (at your option) any later version.
+// See the LICENSE file for the full text.
+
 /**
  * 图片服务层
  * 封装图片相关的业务逻辑
@@ -23,6 +30,20 @@ class ImageService {
     try {
       const imageModel = new ImageModel(db.db);
       return imageModel.search(filters, pagination);
+    } finally {
+      this.dbPool.release(library.path);
+    }
+  }
+
+  /**
+   * 当前范围内的筛选选项（格式 / 大小范围 / 方向 / 评分）
+   */
+  async getFilterOptions(libraryId, filters = {}) {
+    const library = this._getLibrary(libraryId);
+    const db = this.dbPool.acquire(library.path);
+    try {
+      const imageModel = new ImageModel(db.db);
+      return imageModel.getFilterOptions(filters);
     } finally {
       this.dbPool.release(library.path);
     }

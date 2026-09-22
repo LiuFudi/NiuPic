@@ -1,3 +1,10 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 LiuFudi
+//
+// This file is part of NiuPic, licensed under the GNU General Public
+// License version 3 or (at your option) any later version.
+// See the LICENSE file for the full text.
+
 const Database = require('better-sqlite3');
 const path = require('path');
 const { buildNameSortKey } = require('../utils/nameSort');
@@ -204,11 +211,38 @@ class LibraryDatabase {
   }
 
   // Image operations
+  /**
+   * 写入 / 更新一条图片记录（扫描和文件操作都走这里）
+   *
+   * ⚠️ 必须用 ON CONFLICT DO UPDATE，不能用 INSERT OR REPLACE。
+   * `path` 是 UNIQUE，INSERT OR REPLACE 撞到已有路径时是「先删旧行再插新行」，
+   * 上面没列出来的列（rating / favorite / tags）会全部回默认值 ——
+   * 也就是「重扫一次库，评分和收藏就没了」。
+   * 全量重扫、改图后重扫、移动/复制文件都会走到这里，所以这个坑必须堵死。
+   *
+   * 刻意不更新 indexed_at：那是「加入图库的时间」，同一张图重扫不该变，
+   * 否则按「添加时间」排序会乱。
+   * 以后新增列，记得同步下面 DO UPDATE 的列表。
+   */
   insertImage(imageData) {
     const stmt = this.db.prepare(`
-      INSERT OR REPLACE INTO images 
+      INSERT INTO images 
       (path, filename, folder, size, width, height, format, file_type, created_at, modified_at, file_hash, thumbnail_path, thumbnail_size, indexed_at, name_sort)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(path) DO UPDATE SET
+        filename = excluded.filename,
+        folder = excluded.folder,
+        size = excluded.size,
+        width = excluded.width,
+        height = excluded.height,
+        format = excluded.format,
+        file_type = excluded.file_type,
+        created_at = excluded.created_at,
+        modified_at = excluded.modified_at,
+        file_hash = excluded.file_hash,
+        thumbnail_path = excluded.thumbnail_path,
+        thumbnail_size = excluded.thumbnail_size,
+        name_sort = excluded.name_sort
     `);
     const result = stmt.run(
       imageData.path,

@@ -1,3 +1,10 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 LiuFudi
+//
+// This file is part of NiuPic, licensed under the GNU General Public
+// License version 3 or (at your option) any later version.
+// See the LICENSE file for the full text.
+
 /**
  * 图片路由（新架构）
  * 薄层路由，业务逻辑在 Service 层
@@ -32,12 +39,29 @@ router.use((req, res, next) => {
 router.get('/', 
   validatePagination,
   asyncHandler(async (req, res) => {
-    const { libraryId, keywords, folder, formats, offset, limit, sort, order, seed } = req.query;
+    const {
+      libraryId, keywords, folder, formats, offset, limit, sort, order, seed,
+      filterMode, minSize, maxSize, orientations, ratings
+    } = req.query;
 
     const filters = {};
     if (keywords) filters.keywords = keywords;
     if (folder) filters.folder = folder;
-    if (formats) filters.formats = formats.split(',');
+    if (formats) filters.formats = formats.split(',').filter(Boolean);
+
+    // 筛选 / 排除：exclude 时上面那些条件变成「剔除」
+    if (filterMode) filters.filterMode = filterMode === 'exclude' ? 'exclude' : 'include';
+
+    // 文件大小（字节，来自双滑块）
+    const min = Number(minSize);
+    const max = Number(maxSize);
+    if (Number.isFinite(min) && min > 0) filters.minSize = min;
+    if (Number.isFinite(max) && max > 0) filters.maxSize = max;
+
+    // 方向 / 评分
+    if (orientations) filters.orientations = orientations.split(',').filter(Boolean);
+    if (ratings) filters.ratings = ratings.split(',').map(Number).filter((n) => Number.isFinite(n));
+
     // 排序（字段白名单校验在 ImageModel._buildOrderBy 里做）
     if (sort) filters.sort = sort;
     if (order) filters.order = order;
@@ -49,6 +73,27 @@ router.get('/',
 
     const result = await imageService.searchImages(libraryId, filters, pagination);
     res.json({ success: true, data: result });
+  })
+);
+
+/**
+ * 当前范围内的筛选选项
+ * GET /api/image/filter-options?libraryId=xxx&folder=xxx&keywords=xxx
+ *
+ * 界面只应该列出「当前文件夹里实际存在」的格式 / 大小范围 / 方向 / 评分。
+ * 必须放在 /:id 之类的动态路由之前。
+ */
+router.get('/filter-options',
+  asyncHandler(async (req, res) => {
+    const { libraryId, folder, keywords } = req.query;
+    if (!libraryId) {
+      return res.status(400).json({ success: false, message: '缺少必要参数: libraryId' });
+    }
+    const filters = {};
+    if (folder) filters.folder = folder;
+    if (keywords) filters.keywords = keywords;
+    const data = await imageService.getFilterOptions(libraryId, filters);
+    res.json({ success: true, data });
   })
 );
 

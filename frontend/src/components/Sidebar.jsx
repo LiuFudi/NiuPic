@@ -1,5 +1,12 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 LiuFudi
+//
+// This file is part of NiuPic, licensed under the GNU General Public
+// License version 3 or (at your option) any later version.
+// See the LICENSE file for the full text.
+
 import { useState, useMemo, useEffect, useRef, useCallback } from 'react';
-import { Folder, Search, ChevronRight, ChevronDown, X, Trash2, ChevronsRight, ChevronsDown, RefreshCw, Check } from 'lucide-react';
+import { Folder, Search, ChevronRight, ChevronDown, X, Trash2, ChevronsRight, ChevronsDown, RefreshCw, Check, Info } from 'lucide-react';
 import { useLibraryStore } from '../stores/useLibraryStore';
 import { useImageStore } from '../stores/useImageStore';
 import { useScanStore } from '../stores/useScanStore';
@@ -11,6 +18,7 @@ import ContextMenu, { menuItems } from './ContextMenu';
 import UndoToast from './UndoToast';
 import FolderSelector from './FolderSelector';
 import ConflictDialog from './ConflictDialog';
+import AboutDialog from './AboutDialog';
 import { createLogger } from '../utils/logger';
 
 const logger = createLogger('Sidebar');
@@ -63,6 +71,7 @@ function Sidebar() {
   const [undoHistory, setUndoHistory] = useState([]); // 撤销历史栈，支持多次撤销
   const [dragOverFolder, setDragOverFolder] = useState(null); // 拖拽悬停的文件夹
   const [showFolderSelector, setShowFolderSelector] = useState(false); // 显示文件夹选择器
+  const [showAbout, setShowAbout] = useState(false); // 关于对话框
   const [moveFolderPath, setMoveFolderPath] = useState(null); // 待移动的文件夹路径
   const [renamingFolder, setRenamingFolder] = useState(null); // 正在重命名的文件夹
   const [editingFolderName, setEditingFolderName] = useState(''); // 编辑中的文件夹名
@@ -1058,6 +1067,9 @@ function Sidebar() {
         totalCount: 0,
       });
       setSelectedFolder(null);
+      // 筛选条件和搜索词是"上一个库"的语境，一起清掉 ——
+      // 否则新库会被旧条件筛一遍，看起来就是"切库之后没有图片"
+      useImageStore.getState().resetFilters();
 
       // 3. 先切换素材库（确保后端数据库连接已切换）
       await libraryAPI.setCurrent(libraryId);
@@ -1514,6 +1526,16 @@ function Sidebar() {
       <div className="p-4 border-b border-gray-200 dark:border-gray-700">
         <div className="flex items-center justify-between mb-3">
           <h2 className="text-sm font-semibold text-gray-700 dark:text-gray-300">素材库</h2>
+          {/* 关于：版本号 / 版权 / 协议 / 作者主页（协议要求界面里能看到，别只放仓库） */}
+          <button
+            type="button"
+            onClick={() => setShowAbout(true)}
+            title="关于牛图 NiuPic"
+            data-testid="sidebar-about"
+            className="p-1 rounded hover:bg-gray-100 dark:hover:bg-gray-700 text-gray-500 dark:text-gray-400"
+          >
+            <Info className="w-4 h-4" />
+          </button>
         </div>
 
         {/* Library Selector with Delete Button */}
@@ -1877,6 +1899,9 @@ function Sidebar() {
           }}
         />
       )}
+
+      {/* 关于 */}
+      <AboutDialog isOpen={showAbout} onClose={() => setShowAbout(false)} />
 
       {/* 冲突处理对话框 */}
       <ConflictDialog

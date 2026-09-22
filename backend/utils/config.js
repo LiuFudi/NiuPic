@@ -1,3 +1,10 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 LiuFudi
+//
+// This file is part of NiuPic, licensed under the GNU General Public
+// License version 3 or (at your option) any later version.
+// See the LICENSE file for the full text.
+
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
@@ -113,6 +120,15 @@ function saveConfig(config) {
   const configPath = getConfigPath();
   try {
     fs.writeFileSync(configPath, JSON.stringify(config, null, 2), 'utf8');
+    // 顺手留一份备份。
+    // 更新/重装时如果 config.json 因为卸载脚本或平台清理而丢失，
+    // cmd/install_init 会用这份 .bak 自动恢复（素材库列表、主题色、密码都在里面）。
+    try {
+      fs.copyFileSync(configPath, `${configPath}.bak`);
+    } catch (backupError) {
+      // 备份失败不影响主流程
+      console.warn('Error writing config backup:', backupError.message);
+    }
     // 同步更新缓存
     configCache = config;
     configCacheTime = Date.now();

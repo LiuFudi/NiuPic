@@ -1,27 +1,65 @@
 #!/bin/bash
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 LiuFudi
+#
+# This file is part of NiuPic, licensed under the GNU General Public
+# License version 3 or (at your option) any later version.
+# See the LICENSE file for the full text.
 
-# NiuPic 卸载后清理脚本
-# 清理应用配置文件（包括密码、JWT密钥等）
-# 不清理素材库中的 .niupic 数据（缩略图、数据库等）
+# 卸载回调
+#
+# ⚠️ 这里的默认行为必须是「什么都不删」。
+#
+# 原因：飞牛在**通过应用市场手动安装来更新版本**时，会先把旧版本按卸载流程走一遍
+# （见 /var/log/apps/niupic.log：Stopping → 卸载清理 → Starting），再装新版本。
+# 如果这里无条件删配置，每次更新都等于重装：素材库列表、主题色、访问密码、
+# JWT 密钥全丢，用户得从头配一遍 —— 2.1.1 及之前就是这么干的，已经坑过两次。
+#
+# 所以只有用户在「卸载向导」里明确选了「全部删除」才动数据。
+# 官方文档也写明了「卸载逻辑不得擅自删除用户数据」。
+#
+# 向导值通过同名环境变量传入（见 wizard/uninstall 里的 wizard_data_action）。
 
-echo "🧹 NiuPic 卸载清理..."
+LOG="${TRIM_TEMP_LOGFILE:-/dev/null}"
 
-# 清理应用配置文件
-if [ -n "$TRIM_PKGVAR" ]; then
-    CONFIG_FILE="$TRIM_PKGVAR/config.json"
-    
-    if [ -f "$CONFIG_FILE" ]; then
-        echo "清理配置文件: $CONFIG_FILE"
-        rm -f "$CONFIG_FILE"
-        echo "✅ 配置文件已清理"
-    else
-        echo "📝 未找到配置文件，跳过"
+log() {
+    echo "$1"
+    if [ "$LOG" != "/dev/null" ]; then
+        echo "$1" >> "$LOG" 2>/dev/null
     fi
-else
-    echo "⚠️  未检测到飞牛环境变量"
+}
+
+ACTION="${wizard_data_action:-keep}"
+
+log "🧹 NiuPic 卸载清理（数据策略: ${ACTION}）"
+
+if [ "$ACTION" != "delete" ]; then
+    log "✅ 已保留配置和数据（素材库列表、主题色、访问密码都还在）"
+    log "💡 重新安装后直接就能用，不需要重新配置"
+    exit 0
 fi
 
-echo "✨ 卸载清理完成"
-echo "💡 素材库中的 .niupic 数据已保留"
+# ---- 以下只在用户明确选择「全部删除」时执行 ----
+
+# 安全护栏：宁可少删，也不能因为变量为空/异常删错目录。
+# 只认「…/@appdata/<应用名>」这种形态，空值、/、$HOME 之类一律拒绝。
+APP_NAME="${TRIM_APPNAME:-niupic}"
+case "${TRIM_PKGVAR}" in
+    */@appdata/"${APP_NAME}") ;;
+    *)
+        log "⚠️  数据目录看起来不正常（'${TRIM_PKGVAR}'），为安全起见不做删除"
+        exit 0
+        ;;
+esac
+
+if [ -d "${TRIM_PKGVAR}" ]; then
+    log "🗑️  删除应用数据目录: ${TRIM_PKGVAR}"
+    rm -rf "${TRIM_PKGVAR}" 2>/dev/null || log "⚠️  删除失败（可能没有权限）"
+else
+    log "📝 数据目录不存在，跳过"
+fi
+
+log "✨ 卸载清理完成"
+log "💡 素材库里的 .niupic 数据和照片都没有动，需要的话请自行在文件管理器中处理"
 
 exit 0

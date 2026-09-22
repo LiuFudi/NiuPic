@@ -1,3 +1,10 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 LiuFudi
+//
+// This file is part of NiuPic, licensed under the GNU General Public
+// License version 3 or (at your option) any later version.
+// See the LICENSE file for the full text.
+
 import { useState, useEffect, useRef } from 'react';
 import { Copy, Download, Check, FolderDown, ArrowLeft, Folder, FileQuestion } from 'lucide-react';
 import { useLibraryStore } from '../stores/useLibraryStore';
@@ -9,6 +16,7 @@ import { imageAPI, fileAPI } from '../api';
 import JSZip from 'jszip';
 import RatingStars from './RatingStars';
 import { createLogger } from '../utils/logger';
+import * as filePathUtils from '../utils/filePath';
 
 const logger = createLogger('RightPanel');
 
@@ -25,7 +33,8 @@ function RightPanel() {
   const [exportProgress, setExportProgress] = useState(0);
   const [isExportingFolder, setIsExportingFolder] = useState(false);
   const [folderExportProgress, setFolderExportProgress] = useState(0);
-  const [pathCopied, setPathCopied] = useState(false);
+  // 记录刚复制的是哪种格式（'linux' / 'win'），好让对应的按钮显示对勾
+  const [pathCopied, setPathCopied] = useState(null);
   const [isEditingFilename, setIsEditingFilename] = useState(false);
   const [editingFilename, setEditingFilename] = useState('');
   const filenameInputRef = useRef(null);
@@ -53,45 +62,17 @@ function RightPanel() {
   const { getCurrentLibrary } = useLibraryStore();
   const currentLibrary = getCurrentLibrary();
 
-  // 检测操作系统并获取路径分隔符
-  const getPathSeparator = () => {
-    // 检测操作系统
-    const platform = navigator.platform.toLowerCase();
-    const userAgent = navigator.userAgent.toLowerCase();
-    
-    // Windows 系统使用反斜杠
-    if (platform.includes('win') || userAgent.includes('windows')) {
-      return '\\';
-    }
-    // macOS 和 Linux 使用正斜杠
-    return '/';
-  };
+  // 路径相关都在 utils/filePath.js（有单测）：
+  // 界面一律显示 Linux 写法，Windows 写法只在"复制"按钮里给
+  const toWindowsPath = filePathUtils.toWindowsPath;
 
-  // 标准化路径（统一使用当前系统的分隔符）
-  const normalizePath = (path) => {
-    if (!path) return '';
-    const separator = getPathSeparator();
-    // 将所有斜杠统一为当前系统的分隔符
-    return path.replace(/[\\/]+/g, separator);
-  };
-
-  // 获取完整路径（素材库路径 + 图片相对路径）
-  const getFullPath = (imagePath) => {
-    if (!currentLibrary?.path || !imagePath) return imagePath || '';
-    const separator = getPathSeparator();
-    const libraryPath = currentLibrary.path.replace(/[\\/]+$/, ''); // 移除末尾斜杠
-    const relativePath = imagePath.replace(/^[\\/]+/, ''); // 移除开头斜杠
-    const fullPath = `${libraryPath}${separator}${relativePath}`;
-    return normalizePath(fullPath);
-  };
+  const getFullPath = (imagePath) => filePathUtils.joinLibraryPath(currentLibrary?.path, imagePath);
 
   // 获取多个图片的共同父路径
   const getCommonParentPath = (images) => {
     if (!images || images.length === 0) return '';
     if (images.length === 1) return getFullPath(images[0].path);
 
-    const separator = getPathSeparator();
-    
     // 获取所有完整路径
     const fullPaths = images.map(img => getFullPath(img.path));
     
@@ -111,11 +92,11 @@ function RightPanel() {
       }
     }
     
-    return commonParts.length > 0 ? commonParts.join(separator) : normalizePath(currentLibrary?.path || '');
+    return commonParts.length > 0 ? commonParts.join('/') : filePathUtils.toLinuxPath(currentLibrary?.path || '');
   };
 
   // 复制路径到剪贴板
-  const copyPathToClipboard = async (path) => {
+  const copyPathToClipboard = async (path, format = 'linux') => {
     try {
       if (navigator.clipboard && navigator.clipboard.writeText) {
         await navigator.clipboard.writeText(path);
@@ -123,8 +104,8 @@ function RightPanel() {
         // 备用方案
         fallbackCopyText(path);
       }
-      setPathCopied(true);
-      setTimeout(() => setPathCopied(false), 2000);
+      setPathCopied(format);
+      setTimeout(() => setPathCopied(null), 2000);
     } catch (error) {
       logger.error('复制路径失败:', error);
       alert('复制失败，请重试');
@@ -1092,8 +1073,8 @@ function RightPanel() {
     const folderPath = selectedFolderItem.path;
     const folderName = selectedFolderItem.name;
     const { totalCount, totalSize } = getFolderStats(folderPath);
-    const fullPath = currentLibrary?.path 
-      ? normalizePath(`${currentLibrary.path}${getPathSeparator()}${folderPath}`)
+    const fullPath = currentLibrary?.path
+      ? filePathUtils.joinLibraryPath(currentLibrary.path, folderPath)
       : folderPath;
 
     return (
@@ -1157,29 +1138,35 @@ function RightPanel() {
               </div>
               <div>
                 <span className="text-gray-500 dark:text-gray-400">路径:</span>
-                <div className="flex items-start gap-2 mt-1">
-                  <p 
-                    className="flex-1 text-gray-900 dark:text-gray-100 text-xs break-all cursor-pointer hover:text-blue-500 transition-colors"
-                    onClick={() => copyPathToClipboard(fullPath)}
-                    title="点击复制路径"
+              <div className="mt-1">
+                  <p
+                    className="text-gray-900 dark:text-gray-100 text-xs break-all cursor-pointer hover:text-blue-500 transition-colors"
+                    onClick={() => copyPathToClipboard(fullPath, 'linux')}
+                    title="点击复制 Linux 路径"
                   >
                     {fullPath}
                   </p>
-                  <button
-                    onClick={() => copyPathToClipboard(fullPath)}
-                    className={`flex-shrink-0 p-1 rounded transition-colors ${
-                      pathCopied
-                        ? 'text-green-500'
-                        : 'text-gray-400 hover:text-blue-500 hover:bg-gray-100 dark:hover:bg-gray-700'
-                    }`}
-                    title="复制路径"
-                  >
-                    {pathCopied ? (
-                      <Check className="w-4 h-4" />
-                    ) : (
-                      <Copy className="w-4 h-4" />
-                    )}
-                  </button>
+                  {/* 复制按钮在路径**正下方**（放在右边会把长路径挤成好几行） */}
+                  <div className="flex items-center gap-2 mt-1.5">
+                    <button
+                      onClick={() => copyPathToClipboard(fullPath, 'linux')}
+                      data-testid="copy-path-linux"
+                      className={`flex items-center gap-1 px-2 py-0.5 rounded text-[11px] border transition-colors ${pathCopied === 'linux' ? 'border-green-500 text-green-500' : 'border-gray-300 dark:border-gray-600 text-gray-500 dark:text-gray-400 hover:text-blue-500 hover:border-blue-400'}`}
+                      title="复制 Linux 写法（正斜杠，飞牛上的真实路径）"
+                    >
+                      {pathCopied === 'linux' ? <Check className="w-3 h-3" /> : <Copy className="w-3 h-3" />}
+                      Linux 路径
+                    </button>
+                    <button
+                      onClick={() => copyPathToClipboard(toWindowsPath(fullPath), 'win')}
+                      data-testid="copy-path-windows"
+                      className={`flex items-center gap-1 px-2 py-0.5 rounded text-[11px] border transition-colors ${pathCopied === 'win' ? 'border-green-500 text-green-500' : 'border-gray-300 dark:border-gray-600 text-gray-500 dark:text-gray-400 hover:text-blue-500 hover:border-blue-400'}`}
+                      title="复制 Windows 写法（反斜杠）"
+                    >
+                      {pathCopied === 'win' ? <Check className="w-3 h-3" /> : <Copy className="w-3 h-3" />}
+                      Windows 路径
+                    </button>
+                  </div>
                 </div>
               </div>
             </div>
@@ -1513,43 +1500,36 @@ function RightPanel() {
               )}
             <div>
               <span className="text-gray-500 dark:text-gray-400">路径:</span>
-              <div className="flex items-start gap-2 mt-1">
-                <p 
-                  className="flex-1 text-gray-900 dark:text-gray-100 text-xs break-all cursor-pointer hover:text-blue-500 transition-colors"
-                  onClick={() => {
-                    const path = isMultiSelect 
-                      ? getCommonParentPath(getImagesToProcess())
-                      : getFullPath(selectedImage.path);
-                    copyPathToClipboard(path);
-                  }}
-                  title="点击复制路径"
+              <div className="mt-1">
+                <p
+                  className="text-gray-900 dark:text-gray-100 text-xs break-all cursor-pointer hover:text-blue-500 transition-colors"
+                  onClick={() => copyPathToClipboard((isMultiSelect ? getCommonParentPath(getImagesToProcess()) : getFullPath(selectedImage.path)), 'linux')}
+                  title="点击复制 Linux 路径"
                 >
-                  {isMultiSelect 
-                    ? getCommonParentPath(getImagesToProcess())
-                    : getFullPath(selectedImage.path)
-                  }
+                  {isMultiSelect ? getCommonParentPath(getImagesToProcess()) : getFullPath(selectedImage.path)}
                 </p>
-                <button
-                  onClick={() => {
-                    const path = isMultiSelect 
-                      ? getCommonParentPath(getImagesToProcess())
-                      : getFullPath(selectedImage.path);
-                    copyPathToClipboard(path);
-                  }}
-                  className={`flex-shrink-0 p-1 rounded transition-colors ${
-                    pathCopied
-                      ? 'text-green-500'
-                      : 'text-gray-400 hover:text-blue-500 hover:bg-gray-100 dark:hover:bg-gray-700'
-                  }`}
-                  title="复制路径"
-                >
-                  {pathCopied ? (
-                    <Check className="w-4 h-4" />
-                  ) : (
-                    <Copy className="w-4 h-4" />
-                  )}
-                </button>
-              </div>
+                {/* 复制按钮在路径**正下方**（放在右边会把长路径挤成好几行） */}
+                <div className="flex items-center gap-2 mt-1.5">
+                  <button
+                    onClick={() => copyPathToClipboard((isMultiSelect ? getCommonParentPath(getImagesToProcess()) : getFullPath(selectedImage.path)), 'linux')}
+                    data-testid="copy-path-linux"
+                    className={`flex items-center gap-1 px-2 py-0.5 rounded text-[11px] border transition-colors ${pathCopied === 'linux' ? 'border-green-500 text-green-500' : 'border-gray-300 dark:border-gray-600 text-gray-500 dark:text-gray-400 hover:text-blue-500 hover:border-blue-400'}`}
+                    title="复制 Linux 写法（正斜杠，飞牛上的真实路径）"
+                  >
+                    {pathCopied === 'linux' ? <Check className="w-3 h-3" /> : <Copy className="w-3 h-3" />}
+                    Linux 路径
+                  </button>
+                  <button
+                    onClick={() => copyPathToClipboard(toWindowsPath((isMultiSelect ? getCommonParentPath(getImagesToProcess()) : getFullPath(selectedImage.path))), 'win')}
+                    data-testid="copy-path-windows"
+                    className={`flex items-center gap-1 px-2 py-0.5 rounded text-[11px] border transition-colors ${pathCopied === 'win' ? 'border-green-500 text-green-500' : 'border-gray-300 dark:border-gray-600 text-gray-500 dark:text-gray-400 hover:text-blue-500 hover:border-blue-400'}`}
+                    title="复制 Windows 写法（反斜杠）"
+                  >
+                    {pathCopied === 'win' ? <Check className="w-3 h-3" /> : <Copy className="w-3 h-3" />}
+                    Windows 路径
+                  </button>
+                </div>
+                </div>
               {isMultiSelect && (
                 <p className="text-xs text-gray-400 dark:text-gray-500 mt-1">
                   已选择 {actualSelectedCount} 张图片的共同父路径

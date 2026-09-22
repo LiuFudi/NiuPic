@@ -1,0 +1,98 @@
+牛图 NiuPic —— 版权、许可与第三方说明
+=====================================
+
+一、本项目版权
+--------------
+
+Copyright (C) 2026 LiuFudi
+
+牛图 NiuPic 是自由软件：你可以依照自由软件基金会发布的 GNU 通用公共许可证
+（第 3 版，或你选择的任何更新版本）的条款重新发布和修改它。
+协议全文见仓库根目录的 LICENSE，安装包内也附了一份（app/ui/LICENSE.txt）。
+
+二、上游项目（重要）
+--------------------
+
+牛图 NiuPic 是基于 FlyPic 的二次开发，不是从零开始的项目。
+
+  FlyPic  —— https://github.com/ZangXincz/FlyPic（原作者已归档）
+  Copyright (c) 2024-2025 ZangXincz
+  以 MIT 许可证发布
+
+FlyPic 的 MIT 许可证原文（依 MIT 条款要求随本分发保留）：
+
+  MIT License
+
+  Copyright (c) 2024-2025 ZangXincz
+
+  Permission is hereby granted, free of charge, to any person obtaining a copy
+  of this software and associated documentation files (the "Software"), to deal
+  in the Software without restriction, including without limitation the rights
+  to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+  copies of the Software, and to permit persons to whom the Software is
+  furnished to do so, subject to the following conditions:
+
+  The above copyright notice and this permission notice shall be included in all
+  copies or substantial portions of the Software.
+
+  THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+  IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+  FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+  AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+  LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+  OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+  SOFTWARE.
+
+MIT 与 GPL-3.0 兼容（MIT 允许再许可为 GPL），因此本项目整体以 GPL-3.0-or-later
+分发，同时保留上述上游 MIT 声明。**MIT 是宽松协议，无法撤回**：任何人从按 MIT
+发布的旧版本（2.3.9 及更早）取得的权利继续有效，GPL-3.0-or-later 只适用于
+2.3.10 及以后的新版本。变更记录见 CHANGELOG.md。
+
+三、商标与非隶属声明
+--------------------
+
+"飞牛"、"fnOS"、"飞牛私有云"、"飞牛 OS" 等名称与标识是飞牛科技
+（FN Technology / 飞牛私有云）的商标或注册商标。
+
+本应用是第三方开发者的独立项目，**与飞牛科技没有任何隶属、赞助、授权或背书关系**，
+不是官方应用，也不在飞牛官方应用中心预置列表中。应用名与描述中出现上述名称，
+仅为说明本应用运行于该平台、并使用了该平台提供的应用接口，属于合理使用。
+应用内的图标为自制素材，未使用飞牛科技的商标素材。
+
+四、免责声明
+------------
+
+本程序按"现状"提供，不提供任何明示或默示的担保，包括但不限于对适销性和特定
+用途适用性的担保。使用本程序的风险由使用者自行承担。
+
+具体到本应用：它会**读取**你指定的目录（图片、视频、RAW 文件）并在库目录内
+**写入索引数据库与缩略图缓存**（`.niupic/`）。删除素材库、清理缩略图缓存等
+操作会修改磁盘内容，请在操作前自行确认备份。作者与贡献者对因使用本程序导致的
+数据丢失、服务中断或任何其他损害不承担责任。详见 LICENSE 中的免责条款。
+
+五、第三方组件
+--------------
+
+**随包分发的第三方代码**：无。安装包内除本项目自身代码外，只包含运行时依赖
+（由 npm 在打包机上安装后随包分发），依赖清单与版本见：
+
+  - package.json / package-lock.json（构建期依赖）
+  - app/server/package.json（运行时依赖：Express、better-sqlite3、sharp、chokidar 等）
+
+各依赖分别遵循其自身协议（MIT / Apache-2.0 / BSD 等），协议文本随依赖目录分发。
+
+**运行时依赖但不随包分发**（需 NAS 上已存在；缺失时相关功能自动降级，
+不会导致应用无法启动）：
+
+  - FFmpeg / FFprobe —— 视频缩略图与时长（未内嵌，按常见路径探测系统或 fnOS 自带版本）
+  - Linux 内核 inotify —— 素材库文件变更监控（通过 chokidar 使用）
+  - 系统 `trash` / 回收站 —— 删除文件时的可恢复删除
+
+**图标与界面素材**：应用图标（ICON.PNG、ICON_256.PNG、app/ui/images/*）为本项目
+自制，界面使用系统字体，未内嵌任何第三方字体文件。
+
+六、致谢
+--------
+
+  - ZangXincz —— FlyPic 原作者，本项目的起点
+  - 飞牛 fnOS 社区 —— 测试、反馈与需求来源
