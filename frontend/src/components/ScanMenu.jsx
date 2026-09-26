@@ -34,6 +34,7 @@ import { scanAPI, imageAPI } from '../api';
 import { useImageStore } from '../stores/useImageStore';
 import { useLibraryStore } from '../stores/useLibraryStore';
 import { useScanStore } from '../stores/useScanStore';
+import { scanHint } from '../utils/scanHint';
 import { createLogger } from '../utils/logger';
 
 const logger = createLogger('ScanMenu');
@@ -50,32 +51,12 @@ export default function ScanMenu({ libraryId, className = '', align = 'right' })
   const lastScanError = useScanStore((st) => st.lastScanError);
   const clearLastScanResult = useScanStore((st) => st.clearLastScanResult);
 
-  // 扫描结束后的结果提示。最要紧的是"找到 0 个文件"这种情况 ——
-  // 以前界面只会说"扫描完成"，用户完全看不出是权限/路径的问题。
-  const resultHint = useMemo(() => {
-    if (lastScanError) {
-      return { tone: 'error', text: `扫描失败：${lastScanError}` };
-    }
-    if (!lastScanResult || (libraryId && lastScanResult.libraryId !== libraryId)) return null;
+  // 扫描结束后的结果提示（判定逻辑抽在 utils/scanHint.js 里，便于单测）
+  const resultHint = useMemo(
+    () => scanHint(lastScanResult, lastScanError, libraryId),
+    [lastScanResult, lastScanError, libraryId]
+  );
 
-    const { total, processed, errors, added, modified, deleted, removed } = lastScanResult;
-    const changed = [added, modified, deleted, removed, processed]
-      .filter((n) => typeof n === 'number' && n > 0);
-
-    if (total === 0) {
-      return {
-        tone: 'error',
-        text: '扫描完成，但一个文件都没找到 —— 检查素材库目录是否还在、应用是否有读取权限'
-      };
-    }
-    if (typeof total === 'number') {
-      return {
-        tone: 'ok',
-        text: `扫描完成：找到 ${total} 个文件${changed.length ? `，处理 ${changed[0]}` : ''}${errors ? `，失败 ${errors}` : ''}`
-      };
-    }
-    return { tone: 'ok', text: '扫描完成' };
-  }, [lastScanResult, lastScanError, libraryId]);
   const boxRef = useRef(null);
 
   // 点外面关掉
@@ -304,7 +285,7 @@ export default function ScanMenu({ libraryId, className = '', align = 'right' })
           data-testid="scan-result-hint"
           data-tone={resultHint ? resultHint.tone : 'ok'}
           onClick={() => { setDoneHint(''); clearLastScanResult(); }}
-          title="点击关闭"
+          title={resultHint && resultHint.title ? `${resultHint.title}\n\n（点击关闭）` : '点击关闭'}
           className={`absolute top-full mt-1 px-2 py-1 rounded text-white text-xs z-50 flex items-center gap-1 cursor-pointer ${
             align === 'right' ? 'right-0' : 'left-0'
           } ${

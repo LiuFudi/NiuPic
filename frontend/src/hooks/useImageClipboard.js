@@ -48,7 +48,9 @@ export const useImageClipboard = (showConflictDialog) => {
       if (images.length === 1) {
         try {
           const img = images[0];
-          const imageUrl = `/api/image/original/${currentLibraryId}/${img.path}`;
+          // 统一走 imageAPI：基路径和 URL 编码都在那一处算
+          // （以前在这里手拼 `/api/image/original/...`，文件名里有 # ? % 会取不到图）
+          const imageUrl = imageAPI.getOriginalUrl(currentLibraryId, img.path);
           const response = await fetch(imageUrl);
           const blob = await response.blob();
           
@@ -90,7 +92,7 @@ export const useImageClipboard = (showConflictDialog) => {
       try {
         const imageDataList = await Promise.all(
           images.map(async (img) => {
-            const imageUrl = `/api/image/original/${currentLibraryId}/${img.path}`;
+            const imageUrl = imageAPI.getOriginalUrl(currentLibraryId, img.path);
             const response = await fetch(imageUrl);
             const blob = await response.blob();
             

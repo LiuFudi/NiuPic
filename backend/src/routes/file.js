@@ -12,7 +12,10 @@
 
 const express = require('express');
 const router = express.Router();
-const { asyncHandler } = require('../middleware/errorHandler');
+// ValidationError 必须一起引进来：/restore 里用它区分"参数不对（400）"和"服务出错（500）"。
+// 漏掉的话抛的是 ReferenceError，会被 asyncHandler 交给错误中间件、返回 500
+// —— 用户看到「服务器内部错误」，排查方向完全被带偏。
+const { asyncHandler, ValidationError } = require('../middleware/errorHandler');
 
 // 服务实例（从 app 中获取）
 let fileService;

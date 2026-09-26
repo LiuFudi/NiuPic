@@ -13,6 +13,7 @@ import { useUIStore } from '../stores/useUIStore';
 import { useScanStore } from '../stores/useScanStore';
 import { useClipboardStore } from '../stores/useClipboardStore';
 import { imageAPI, fileAPI } from '../api';
+import { displayUrlFor, isDisplayableImage } from '../utils/displayUrl';
 import JSZip from 'jszip';
 import RatingStars from './RatingStars';
 import { createLogger } from '../utils/logger';
@@ -319,15 +320,11 @@ function RightPanel() {
     return () => window.removeEventListener('resize', checkMobile);
   }, []);
   
-  // 判断是否为可以直接显示原图的格式
-  const canShowOriginal = (format) => {
-    if (!format) return false;
-    // 添加 gif 支持，以便显示动画效果
-    const supportedFormats = ['jpg', 'jpeg', 'png', 'webp', 'gif'];
-    return supportedFormats.includes(format.toLowerCase());
-  };
-
-  // 图片加载策略：先显示缩略图，后台加载原图；拖动右侧面板时只显示缩略图
+  // 图片加载策略：先显示缩略图，再换成"能显示的大图"；拖动右侧面板时只显示缩略图。
+  //
+  // 这里以前写死了一份 `['jpg','jpeg','png','webp','gif']`，于是 HEIC（iPhone 原图）、
+  // TIFF、AVIF、BMP、SVG 以及各家相机 RAW 在面板里永远只有一张缩略图。
+  // 现在一律请后端判断：预览路由对浏览器认的格式直接发原图，对不认的转码。
   useEffect(() => {
     if (!selectedImage || !currentLibraryId) {
       setImageUrl('');
@@ -338,14 +335,9 @@ function RightPanel() {
     const thumbnailUrl = getThumbnailUrl();
     setImageUrl(thumbnailUrl);
     
-    // 检查图片格式
-    const imageFormat = selectedImage.format;
-    const shouldLoadOriginal = canShowOriginal(imageFormat);
-    
-    // 对于不支持的格式，只显示缩略图
-    if (!shouldLoadOriginal) {
+    // 非图片（视频/音频/文档/设计稿）没有"大图"，保持缩略图
+    if (!isDisplayableImage(selectedImage)) {
       setIsLoadingOriginal(false);
-      // 不支持直接显示原图，使用缩略图
       return;
     }
     
@@ -357,23 +349,23 @@ function RightPanel() {
       return;
     }
 
-    // 2. 后台预加载原图（仅支持的格式）
-    const originalUrl = getOriginalUrl();
+    // 2. 后台预加载显示图（后端负责把 HEIC/RAW/TIFF/PSD… 转成浏览器认的格式）
+    const previewUrl = getDisplayUrl();
     const img = new Image();
     
     img.onload = () => {
-      // 原图加载完成，切换到原图
-      setImageUrl(originalUrl);
+      // 加载完成，切换到清晰大图
+      setImageUrl(previewUrl);
       setIsLoadingOriginal(false);
     };
     
     img.onerror = () => {
-      // 原图加载失败，保持显示缩略图
-      logger.error('Failed to load original image');
+      // 加载失败，保持显示缩略图
+      logger.error('Failed to load preview image');
       setIsLoadingOriginal(false);
     };
     
-    img.src = originalUrl;
+    img.src = previewUrl;
     
     // 清理函数
     return () => {
@@ -407,9 +399,15 @@ function RightPanel() {
     return imageAPI.getThumbnailUrl(currentLibraryId, filename);
   };
   
+  /** 原图 URL：导出、下载、交给系统应用 —— 要的是**原始字节** */
   const getOriginalUrl = () => {
     if (!currentLibraryId || !selectedImage?.path) return '';
     return imageAPI.getOriginalUrl(currentLibraryId, selectedImage.path);
+  };
+
+  /** 显示用 URL：面板里"看得见"的那张大图 */
+  const getDisplayUrl = () => {
+    return displayUrlFor(currentLibraryId, selectedImage);
   };
 
   // 检查剪贴板 API 是否可用
@@ -576,8 +574,9 @@ function RightPanel() {
       copyToClipboard(itemsToCopy, 'copy');
       logger.file('已复制 1 个文件到应用内剪贴板');
       
-      // 2. 获取原图URL，写入系统剪贴板
-      const imageUrl = imageAPI.getOriginalUrl(currentLibraryId, selectedImage.path);
+      // 2. 取**显示用**图写入系统剪贴板：系统剪贴板放不了 HEIC/RAW，
+      //    走预览路由至少能把画面复制出去（原来直接拿原图，这些格式必然失败）
+      const imageUrl = getDisplayUrl();
       
       // 方案1：尝试现代 Clipboard API（需要 HTTPS）
       if (isClipboardApiSupported()) {
@@ -769,7 +768,7 @@ function RightPanel() {
       
       // 多张图片
       const imageUrls = imagesToCopy.map(img => ({
-        url: imageAPI.getOriginalUrl(currentLibraryId, img.path),
+        url: displayUrlFor(currentLibraryId, img),
         filename: img.filename
       }));
       
@@ -782,7 +781,7 @@ function RightPanel() {
           // 加载所有图片并转换为 base64
           const imageDataList = await Promise.all(
             imagesToCopy.map(async (img) => {
-              const imageUrl = imageAPI.getOriginalUrl(currentLibraryId, img.path);
+              const imageUrl = displayUrlFor(currentLibraryId, img);
               const response = await fetch(imageUrl);
               const blob = await response.blob();
               

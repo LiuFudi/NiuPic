@@ -5,18 +5,65 @@
 # This file is part of NiuPic, licensed under the GNU General Public
 # License version 3 or (at your option) any later version.
 # See the LICENSE file for the full text.
+#
+# 生命周期脚本：启停 + 状态（退出码契约见《飞牛fpk开发规范》4.2）
+#   start / stop: 0 = 成功，1 = 失败
+#   status      : 0 = 正在运行，3 = 未运行
+#
+# 下面四件事都是规范 4.3 点名"必须补"的，不是可选优化：
+#   1. status 校验进程身份（/proc/<pid>/cmdline）—— 内核会复用 PID，
+#      只 kill -0 会把别人的进程当成自己的；应用中心于是跳过启动、却又注册了
+#      网关路由，用户打开只有 502，而且 status 不写日志、毫无线索（坑 3）
+#   2. status 还要求 app.sock 存在 —— 否则"启动了但没起来"会被当成健康
+#   3. start 用 setsid 脱离父进程，并等 socket 就绪（带超时），失败如实返回 1
+#   4. stop 要扫 PID 文件之外的游离进程，不能只杀文件里那一个
 
 set -e
 
+APP_NAME="${TRIM_APPNAME:-niupic}"
 LOG_FILE="${TRIM_PKGVAR}/info.log"
 PID_FILE="${TRIM_PKGVAR}/app.pid"
 
-export PATH=/var/apps/nodejs_v22/target/bin:$PATH
+# 网关 socket：server.js 监听的就是 $TRIM_APPDEST/app.sock
+# （与 app/ui/config 里的 gatewaySocket 对应），status 靠它判断"真的可用"。
+SOCK="${TRIM_APPDEST}/app.sock"
+SERVER_JS="${TRIM_APPDEST}/server/server.js"
+
+# ⚠️ 不要假定 node 在 PATH 里：manifest 声明了 install_dep_apps = nodejs_v22，
+# 飞牛会自动装上它，但"装了"不等于"PATH 里有"（规范第十一节坑 4）。
+# 先按版本目录找，再扫其它 nodejs_v*，最后才退回 PATH 里的 node。
+NODE_BIN=""
+for candidate in /var/apps/nodejs_v22/target/bin/node /var/apps/nodejs_v24/target/bin/node; do
+    if [ -x "$candidate" ]; then
+        NODE_BIN="$candidate"
+        break
+    fi
+done
+if [ -z "$NODE_BIN" ]; then
+    for candidate in /var/apps/nodejs_v*/target/bin/node; do
+        if [ -x "$candidate" ]; then
+            NODE_BIN="$candidate"
+            break
+        fi
+    done
+fi
+if [ -z "$NODE_BIN" ]; then
+    NODE_BIN="$(command -v node || true)"
+fi
+if [ -z "$NODE_BIN" ]; then
+    # 面向用户的说明写进 TRIM_TEMP_LOGFILE，**同时**写自己的日志（规范 4.6：双写，
+    # 平台日志不一定能看到全部输出）
+    NODE_ERR="找不到 node 运行时，请确认依赖应用 nodejs_v22 已安装"
+    echo "$NODE_ERR" >> "${TRIM_TEMP_LOGFILE:-/dev/null}" 2>&1 || true
+    echo "$(date '+%Y-%m-%d %H:%M:%S') - $NODE_ERR" >> "${LOG_FILE}" 2>&1 || true
+    exit 1
+fi
+export PATH="$(dirname "$NODE_BIN"):$PATH"
 
 # 数据目录
 DATA_DIR="${TRIM_DATA_SHARE_PATHS%%:*}"
 
-# 读取用户配置的端口（默认 5002）
+# 读取用户配置的端口（默认 15002）
 PORT_CONF="${TRIM_PKGVAR}/port.conf"
 if [ -f "$PORT_CONF" ]; then
     source "$PORT_CONF"
@@ -37,10 +84,7 @@ export PORT="${APP_PORT}"
 #   TRIM_API_TOKEN             —— 调飞牛开放 API 查授权清单用（不落盘、不打日志）
 export TRIM_DATA_ACCESSIBLE_PATHS
 export TRIM_API_TOKEN
-export TRIM_APPNAME="${TRIM_APPNAME:-niupic}"
-
-# 启动命令
-CMD="node ${TRIM_APPDEST}/server/server.js"
+export TRIM_APPNAME="${APP_NAME}"
 
 log_msg() {
     local msg="$(date '+%Y-%m-%d %H:%M:%S') - $1"
@@ -51,86 +95,191 @@ log_msg() {
     fi
 }
 
+# 进程身份校验（规范 4.3-1）：内核会复用 PID，只 kill -0 会把别人的进程当成自己。
+_process_is_ours() {
+    local pid="${1:-}"
+    [ -n "$pid" ] || return 1
+    # 路径为空时 grep -q "" 会匹配所有进程，必须先挡住
+    [ -n "${SERVER_JS}" ] || return 1
+    if [ -r "/proc/${pid}/cmdline" ]; then
+        if tr '\0' ' ' < "/proc/${pid}/cmdline" 2>/dev/null | grep -q "${SERVER_JS}"; then
+            return 0
+        fi
+        return 1
+    fi
+    # 读不到 /proc（少数系统开了 hidepid）：退回"只看 PID 存活"。
+    # 老行为就是这个，宁可少一层校验，也不要因为读不到 cmdline 就永远认不出自己的进程。
+    kill -0 "${pid}" 2>/dev/null
+}
+
+check_process() {
+    local pid="${1:-}"
+    _process_is_ours "$pid" || return 1
+    kill -0 "$pid" 2>/dev/null
+}
+
+# 列出所有属于本应用的守护进程（stop 兜底用，规范 4.3-4）
+list_daemon_pids() {
+    local dir pid
+    for dir in /proc/[0-9]*; do
+        pid="${dir#/proc/}"
+        if _process_is_ours "$pid"; then
+            echo "$pid"
+        fi
+    done
+}
+
+# 等就绪判据（socket 出现），40 × 0.25s = 10 秒。不要盲 sleep（规范 4.3-5）
+wait_ready() {
+    local i=0
+    while [ "$i" -lt 40 ]; do
+        if [ -S "${SOCK}" ]; then
+            return 0
+        fi
+        sleep 0.25
+        i=$((i + 1))
+    done
+    return 1
+}
+
 start_process() {
-    if status; then
+    local pid=""
+    local ready_pid=""
+
+    if [ -r "${PID_FILE}" ]; then
+        pid=$(head -n 1 "${PID_FILE}" | tr -d '[:space:]')
+    fi
+
+    if check_process "$pid"; then
+        log_msg "已经在运行 (pid=${pid})"
+        if wait_ready; then
+            return 0
+        fi
+        log_msg "进程在运行但 socket 未就绪（${SOCK}），详见 ${LOG_FILE}"
+        return 1
+    fi
+
+    # 陈旧 socket 会让 listen 失败（规范第十一节坑 8）
+    rm -f "${SOCK}"
+
+    log_msg "Starting NiuPic..."
+    # setsid：脱离父进程，否则应用中心回收脚本进程时会把守护进程一起带走（规范 4.3-6）。
+    # 让子进程**自己写 PID**：setsid 在必要时会 fork，用 $! 记下来可能记到错的进程。
+    setsid bash -c 'echo $$ > "$1"; exec "$2" "$3"' _ "${PID_FILE}" "${NODE_BIN}" "${SERVER_JS}" >> "${LOG_FILE}" 2>&1 &
+
+    # 起来了才算成功：等就绪判据 + 超时，失败返回 1（规范 4.3-5、坑 19）
+    if wait_ready; then
+        ready_pid=$(head -n 1 "${PID_FILE}" 2>/dev/null | tr -d '[:space:]')
+        log_msg "NiuPic started (pid=${ready_pid})"
         return 0
     fi
 
-    log_msg "Starting NiuPic..."
-    bash -c "${CMD}" >> ${LOG_FILE} 2>&1 &
-    printf "%s" "$!" > ${PID_FILE}
-    return 0
+    log_msg "启动失败：10 秒内没有出现 ${SOCK}"
+    if [ -r "${PID_FILE}" ]; then
+        pid=$(head -n 1 "${PID_FILE}" | tr -d '[:space:]')
+        if ! check_process "$pid"; then
+            log_msg "守护进程已退出，详见 ${LOG_FILE}"
+        fi
+    fi
+    return 1
 }
 
 stop_process() {
     log_msg "Stopping NiuPic..."
 
+    local targets=""
+    local pid=""
+    local p=""
+    local alive=""
+    local count=0
+
     if [ -r "${PID_FILE}" ]; then
         pid=$(head -n 1 "${PID_FILE}" | tr -d '[:space:]')
-        
-        log_msg "pid=${pid}"
-        if ! check_process "${pid}"; then
-            rm -f "${PID_FILE}"
-            log_msg "remove pid file"
-            return
-        fi
-
-        log_msg "send TERM signal to PID:${pid}..."
-        kill -TERM ${pid} >> ${LOG_FILE} 2>&1
-
-        local count=0
-        while check_process "${pid}" && [ $count -lt 10 ]; do
-            sleep 1
-            count=$((count + 1))
-            log_msg "waiting process terminal... (${count}s/10s)"
-        done
-
-        if check_process "${pid}"; then
-            log_msg "send KILL signal to PID:${pid}..."
-            kill -KILL "${pid}"
-            sleep 1
-            rm -f "${PID_FILE}"
+        if check_process "$pid"; then
+            targets="$pid"
         else
-            log_msg "process killed..."
+            log_msg "pid 文件已陈旧（pid=${pid}），忽略"
         fi
     fi
 
+    # 游离进程也要杀（规范 4.3-4）：只处理 PID 文件里那一个会漏掉重启残留的实例
+    for p in $(list_daemon_pids); do
+        case " ${targets} " in
+            *" ${p} "*) ;;
+            *) targets="${targets} ${p}" ;;
+        esac
+    done
+
+    if [ -z "${targets// /}" ]; then
+        log_msg "没有正在运行的进程"
+        rm -f "${PID_FILE}"
+        return 0
+    fi
+
+    log_msg "send TERM signal to:${targets}"
+    kill -TERM ${targets} >> "${LOG_FILE}" 2>&1 || true
+
+    while [ $count -lt 10 ]; do
+        alive=""
+        for p in ${targets}; do
+            if check_process "$p"; then
+                alive="${alive} ${p}"
+            fi
+        done
+        if [ -z "${alive// /}" ]; then
+            break
+        fi
+        sleep 1
+        count=$((count + 1))
+        log_msg "waiting process terminal... (${count}s/10s)"
+    done
+
+    if [ -n "${alive// /}" ]; then
+        log_msg "send KILL signal to:${alive}"
+        kill -KILL ${alive} 2>/dev/null || true
+        sleep 1
+    fi
+
+    rm -f "${PID_FILE}"
+    log_msg "process stopped"
     return 0
 }
 
-check_process() {
-    local pid=$1
-    if kill -0 "${pid}" 2>/dev/null; then
-        return 0
-    else
+status() {
+    local pid=""
+    if [ -r "${PID_FILE}" ]; then
+        pid=$(head -n 1 "${PID_FILE}" | tr -d '[:space:]')
+    fi
+
+    if check_process "$pid"; then
+        # 只看 PID 不够：socket 真的在才算可用（规范 4.3-2）
+        if [ -S "${SOCK}" ]; then
+            return 0
+        fi
+        log_msg "status: 进程在（pid=${pid}）但 socket 不在，判定为未运行"
         return 1
     fi
-}
 
-status() {
     if [ -f "${PID_FILE}" ]; then
-        pid=$(head -n 1 "${PID_FILE}" | tr -d '[:space:]')
-        if check_process "${pid}"; then
-            return 0
-        else
-            rm -f "${PID_FILE}"
-        fi    
+        rm -f "${PID_FILE}"
     fi
 
     return 1
 }
 
-case $1 in
+case "${1:-}" in
 start)
-    start_process
+    start_process || exit 1
+    exit 0
     ;;
 stop)
-    stop_process
+    stop_process || exit 1
+    exit 0
     ;;
 status)
-    if status; then 
+    if status; then
         exit 0
-    else 
+    else
         exit 3
     fi
     ;;

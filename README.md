@@ -1,9 +1,9 @@
-# 牛图 NiuPic
+# NiuPic · 牛图库
 
 > 为飞牛 fnOS 设计的轻量、快速、稳定的图像素材检索浏览应用。
 > 支持数十万级别图片流畅浏览，非侵入式设计，100% 开源免费。
 
-![版本](https://img.shields.io/badge/version-2.4.1-blue)
+![版本](https://img.shields.io/badge/version-2.6.0-blue)
 ![许可证](https://img.shields.io/badge/license-GPL--3.0--or--later-blue)
 ![平台](https://img.shields.io/badge/platform-fnOS%20x86__64-green)
 
@@ -11,27 +11,29 @@
 
 ## 关于本项目 / 接手说明
 
-**牛图 NiuPic 是 [FlyPic](https://github.com/ZangXincz/FlyPic) 的延续，不是从零开始的新项目。**
+**NiuPic 是 [FlyPic](https://github.com/ZangXincz/FlyPic) 的延续，不是从零开始的新项目。**
 
 - **原作者：[ZangXincz](https://github.com/ZangXincz)** —— FlyPic 的作者。
   公开仓库的最后一个版本是 **1.2.0**（2025-12），2026-03 作者宣布停更（"因某些原因，本人不再使用飞牛"），
   仓库随后归档。
 - **后续维护：[LiuFudi](https://github.com/LiuFudi)** —— **自 FlyPic 1.3.0 起继续维护**：
   1.3.0 是在 1.2.0 基础上做的（新增全屏查看器、重做打包脚本等），仍沿用 FlyPic 的名字；
-  之后更名 **牛图 NiuPic**，版本从 2.0.x 一路走到现在。
+  之后更名 **NiuPic**，版本从 2.0.x 一路走到现在。2.6.0 起**对外显示名统一为「牛图库」**
+  （桌面图标 / 应用列表 / 应用中心），进入应用后界面内仍显示 **NiuPic**。
 
 FlyPic 的作者把这样一个完成度很高、并且真正解决「几十万张图怎么快速找图」这个实际问题的项目开源了出来，
-牛图是在他的成果上继续往前走。原始的架构设计、扫描与索引方案、缩略图与内存控制策略都来自 FlyPic，
+NiuPic 是在他的成果上继续往前走。原始的架构设计、扫描与索引方案、缩略图与内存控制策略都来自 FlyPic，
 这些是项目真正的骨架，特此致谢并保留署名。
 
-如果你在使用中发现牛图好用，也请给[原项目](https://github.com/ZangXincz/FlyPic)点一个 star。
+如果你在使用中发现 NiuPic 好用，也请给[原项目](https://github.com/ZangXincz/FlyPic)点一个 star。
 
 ### 相比 FlyPic 最后一次发布（1.3.x）的变化
 
 | 变更 | 说明 |
 |---|---|
-| 品牌 | FlyPic / 飞图 → **牛图 NiuPic** |
-| 版本 | 1.3.0 → **2.4.1** |
+| 品牌 | FlyPic / 飞图 → **NiuPic** |
+| 对外显示名 | **牛图库**（桌面图标 / 应用列表 / 应用中心；界面内显示 `NiuPic`） |
+| 版本 | 1.3.0 → **2.6.0** |
 | 应用 ID | `flypic` → `niupic`（安装目录、数据目录同步变更） |
 | 素材库索引目录 | `.flypic` → `.niupic`（提供迁移脚本，见下） |
 | 权限模型 | 新增。素材库只能从「可访问文件夹」（飞牛应用市场里授权的目录）里选，不再手输路径 |
@@ -76,6 +78,10 @@ NiuPic 和其他飞牛应用一样，**默认看不到任何用户文件夹**。
 - 卸载默认**保留**数据，只有你在卸载向导里选「全部删除」才会清理
 - 每次保存配置都会留一份 `config.json.bak`，安装时发现主配置不见了会自动恢复
 
+> **2.5.5 起配置放在 `etc/`**（`/vol{N}/@appconf/niupic/`，飞牛卸载时不删），
+> 不再是 `@appdata`。首次启动会自动把旧位置那份**复制**过去（旧文件留着兜底）。
+> 下面那条 2.1.x 的历史备份命令里的 `@appdata` 是**当时**的位置，现在照着做要换成 `@appconf`。
+
 > **从 2.1.1 升到 2.1.2 会丢一次配置**：执行删除的是已经装在机器上的 2.1.1。
 > 想连这一次也不丢，装之前先备份一下，新版会自动恢复：
 >
@@ -87,23 +93,23 @@ NiuPic 和其他飞牛应用一样，**默认看不到任何用户文件夹**。
 
 ## 从 FlyPic 迁移
 
-牛图沿用了 FlyPic 的索引格式，**旧素材库不用重新扫描、不用重建缩略图**。
+NiuPic 沿用了 FlyPic 的索引格式，**旧素材库不用重新扫描、不用重建缩略图**。
 
 假设你有素材库 `/vol1/1000/Photos`（卷号以你的 NAS 为准，下面统一写 `/vol1`）：
 
 ```bash
-# 1. 安装牛图 NiuPic（应用中心 → 手动安装 → niupic_2.4.1_x86.fpk）
+# 1. 安装 NiuPic · 牛图库（应用中心 → 手动安装 → niupic_2.6.0_x86.fpk）
 # 2. 在 NAS 上以 root 执行迁移脚本（把 .flypic 就地改成 .niupic）
 node /vol1/@appcenter/niupic/server/scripts/migrate-flypic-dir.js /vol1/1000/Photos
 #    有多个素材库就一次传多个路径
-# 3. 打开牛图 → 应用设置里授权该目录 → 添加素材库 → 从列表里选中同一路径
+# 3. 打开 NiuPic → 应用设置里授权该目录 → 添加素材库 → 从列表里选中同一路径
 #    会提示 "Library created with existing index"，图片和缩略图立刻可用
 ```
 
 迁移脚本做两件事：重命名目录、把数据库里 `thumbnail_path` 的 `.flypic/` 前缀改成 `.niupic/`。
 两步都是就地操作，秒级完成。不做迁移直接重新扫描也可以，只是大库会花不少时间重建缩略图。
 
-> ⚠️ `appname` 从 `flypic` 改成了 `niupic`，所以牛图对 fnOS 来说是一个**新应用**：
+> ⚠️ `appname` 从 `flypic` 改成了 `niupic`，所以 NiuPic 对 fnOS 来说是一个**新应用**：
 > 素材库列表、访问密码、主题这些存在 `/vol1/@appdata/` 里的配置不会自动继承，需要重新设置一次。
 > 但素材库里的索引（`.niupic/`）和图片本身都不受影响。
 
@@ -197,12 +203,13 @@ scripts/                构建脚本
 
 - 不联网、不上报、不统计点击；
 - 打赏完全自愿，**不影响任何功能**，也不会改变软件的任何行为。
+  如果遇到BUG，欢迎前往[Github](https://github.com/LiuFudi/NiuPic)反馈或者添加QQ群：818299505
 
 ## 许可
 
 [GNU General Public License v3.0 或更新版本](LICENSE) © 2026 [LiuFudi](https://github.com/LiuFudi)
 
-牛图 NiuPic 是自由软件：你可以依照自由软件基金会发布的 GNU 通用公共许可证
+NiuPic 是自由软件：你可以依照自由软件基金会发布的 GNU 通用公共许可证
 （第 3 版，或你选择的任何更新版本）的条款重新发布和/或修改它。
 
 本程序分发时希望它有用，但不提供**任何担保**，甚至不带对适销性或特定用途适用性的

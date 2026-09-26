@@ -31,34 +31,25 @@ function clearSharpCache() {
   sharp.cache(SHARP_CONFIG); // 重新启用最小缓存
 }
 
-// 支持的文件格式（确定可以生成缩略图的）
-const IMAGE_FORMATS = ['jpg', 'jpeg', 'png', 'webp', 'gif', 'bmp', 'tiff', 'tif', 'avif', 'heif', 'heic', 'svg'];
+// 格式清单全部来自 src/config/formats.js —— **只在那里定义一次**。
+// 以前这里自己写了一份 IMAGE_FORMATS + FILE_CATEGORIES，和 rawPreview 的 RAW 清单、
+// constants 的 SUPPORTED_FORMATS 三份并存，改一处忘一处是必然的。
+const formats = require('../src/config/formats');
+
+// 能出真实缩略图的图片格式（sharp 解得了的，或 ffmpeg 解得了的）
+const IMAGE_FORMATS = formats.IMAGE_EXT.filter(
+  (e) => formats.getImageDecoder(e) !== 'unsupported'
+);
 
 // 文件类型分类（用于显示和占位图）
 const FILE_CATEGORIES = {
-  // 图片类
-  // 包含各家相机的 RAW：sharp 读不了它们（会退化成占位尺寸），但它们是照片，
+  // 图片类包含各家相机 RAW：sharp/ffmpeg 都读不了它们，但它们是照片原片，
   // 必须归到「图片」而不是「其他」，否则相机库一整批原片会被塞进"其他"里。
-  image: [
-    'jpg', 'jpeg', 'png', 'webp', 'gif', 'bmp', 'tiff', 'tif', 'avif', 'heif', 'heic', 'svg', 'ico',
-    'raw', 'cr2', 'cr3', 'crw', 'nef', 'nrw', 'arw', 'srf', 'sr2', 'dng', 'rw2', 'rwl',
-    'orf', 'raf', 'srw', 'pef', 'ptx', '3fr', 'fff', 'iiq', 'mrw', 'x3f', 'erf', 'kdc', 'mef'
-  ],
-
-  // 视频类
-  video: ['mp4', 'webm', 'mov', 'avi', 'mkv', 'flv', 'm4v', 'wmv', 'mpg', 'mpeg', '3gp', 'ts', 'vob', 'ogv'],
-
-  // 音频类
-  audio: ['mp3', 'wav', 'flac', 'aac', 'm4a', 'ogg', 'wma', 'ape', 'alac', 'opus', 'aiff'],
-
-  // 文档类
-  document: [
-    'pdf', 'txt', 'md', 'doc', 'docx', 'xls', 'xlsx', 'ppt', 'pptx',
-    'rtf', 'odt', 'ods', 'odp', 'csv', 'pages', 'numbers', 'key'
-  ],
-
-  // 设计类
-  design: ['psd', 'ai', 'sketch', 'xd', 'fig', 'figma', 'indd', 'eps', 'cdr', 'dwg']
+  image: formats.IMAGE_EXT,
+  video: formats.VIDEO_EXT,
+  audio: formats.AUDIO_EXT,
+  document: formats.DOCUMENT_EXT,
+  design: formats.DESIGN_EXT,
 };
 
 // 为了兼容旧代码
@@ -100,7 +91,8 @@ function getFileType(filename) {
  */
 function canGenerateThumbnail(filename) {
   const ext = path.extname(filename).toLowerCase().slice(1);
-  return IMAGE_FORMATS.includes(ext);
+  // 「能不能出缩略图」= 有没有解码器，而不是"看起来是不是图片扩展名"
+  return formats.getImageDecoder(ext) !== 'unsupported';
 }
 
 /**
@@ -369,6 +361,24 @@ async function getImageMetadata(imagePath) {
 
     const ext = path.extname(imagePath).toLowerCase().slice(1);
 
+    // sharp 解不了的静态图（psd/tga/exr/hdr/jp2/qoi/dds/dpx/bmp/pnm）：
+    // 上面 sharp 已经失败落到这里，用 ffprobe 拿真实宽高（只读头部，不解码）
+    if (formats.getImageDecoder(ext) === 'ffmpeg') {
+      try {
+        const info = await probeVideo(imagePath);
+        if (info && info.width && info.height) {
+          return {
+            width: info.width,
+            height: info.height,
+            format: ext,
+            size: stats.size,
+            created_at: stats.birthtimeMs,
+            modified_at: stats.mtimeMs
+          };
+        }
+      } catch { /* 退回占位尺寸 */ }
+    }
+
     // 相机 RAW：sharp 读不了，但内嵌的 JPEG 预览能给出真实宽高
     // （以前一律给 640×480 占位，竖拍的片子会被排成横图）
     if (isRawFile(imagePath)) {
@@ -448,12 +458,56 @@ async function generateImageThumbnails(imagePath, libraryPath) {
   // 根据文件类型生成不同的缩略图
   const ext = path.extname(imagePath).slice(1).toUpperCase();
 
-  if (fileType === 'image' && canGenerateThumbnail(imagePath)) {
+  // 分发依据只有 formats.getImageDecoder() 一处 —— 这几张扩展名清单以前散在三处，
+  // 现在收敛成一个函数，谁也不再自己写一遍。
+  const decoder = formats.getImageDecoder(path.extname(imagePath));
+
+  if (fileType === 'image' && decoder === 'sharp') {
     // 图片：使用 Sharp 生成真实缩略图
     stepStart = Date.now();
-    thumbnailResult = await generateThumbnail(imagePath, out480, targetHeight);
+    try {
+      thumbnailResult = await generateThumbnail(imagePath, out480, targetHeight);
+    } catch (error) {
+      // libvips 也会遇到"扩展名说能解、内容其实解不了"的文件（截断的 heic、改名过的假后缀）。
+      // 这里不再往上抛：退回 ffmpeg、再退回占位图，网格里总得有张图。
+      console.warn(`  ⚠️ Sharp 解码失败，改用 ffmpeg 重试 ${filename}: ${error.message}`);
+      thumbnailResult = null;
+    }
     stepTimes.generate = Date.now() - stepStart;
-  } else if (isRawThumbnailable(imagePath)) {
+
+    if (!thumbnailResult) {
+      stepStart = Date.now();
+      thumbnailResult = await extractStillThumbnail(imagePath, out480);
+      stepTimes.ffmpegStill = Date.now() - stepStart;
+    }
+
+    if (!thumbnailResult) {
+      stepStart = Date.now();
+      thumbnailResult = await generatePlaceholderThumbnail(out480, 'image', ext);
+      stepTimes.placeholder = Date.now() - stepStart;
+    }
+  } else if (fileType === 'image' && decoder === 'ffmpeg') {
+    // sharp 解不了、ffmpeg 能解的静态图：psd/tga/exr/hdr/jp2/qoi/dds/dpx/bmp/pnm
+    stepStart = Date.now();
+
+    // PSD 先试内嵌预览：那是作者存好的成品预览，比重新解码整张 PSD 更快也更准
+    if (path.extname(imagePath).toLowerCase() === '.psd') {
+      thumbnailResult = await extractPSDThumbnail(imagePath, out480);
+      stepTimes.psdExtract = Date.now() - stepStart;
+      stepStart = Date.now();
+    }
+
+    if (!thumbnailResult) {
+      thumbnailResult = await extractStillThumbnail(imagePath, out480);
+      stepTimes.ffmpegStill = Date.now() - stepStart;
+    }
+
+    if (!thumbnailResult) {
+      stepStart = Date.now();
+      thumbnailResult = await generatePlaceholderThumbnail(out480, 'image', ext);
+      stepTimes.placeholder = Date.now() - stepStart;
+    }
+  } else if (fileType === 'image' && decoder === 'raw') {
     // 相机 RAW：抠出内嵌的 JPEG 预览再缩放 —— 不然网格里只能是一张灰占位图
     stepStart = Date.now();
     thumbnailResult = await generateRawThumbnail(imagePath, out480, targetHeight);
@@ -477,19 +531,11 @@ async function generateImageThumbnails(imagePath, libraryPath) {
       stepTimes.placeholder = Date.now() - stepStart;
     }
   } else if (fileType === 'design') {
-    // 设计文件：尝试提取嵌入缩略图（仅 PSD）
-    if (ext.toLowerCase() === 'psd') {
-      stepStart = Date.now();
-      thumbnailResult = await extractPSDThumbnail(imagePath, out480);
-      stepTimes.psdExtract = Date.now() - stepStart;
-    }
-
-    // 如果提取失败或不是 PSD，生成占位图
-    if (!thumbnailResult) {
-      stepStart = Date.now();
-      thumbnailResult = await generatePlaceholderThumbnail(out480, 'design', ext);
-      stepTimes.placeholder = Date.now() - stepStart;
-    }
+    // 设计稿（ai/sketch/xd/fig/indd…）：没有可用的解码器，统一出占位图。
+    // PSD 已归到「图片」类别走 ffmpeg/内嵌预览，不再走这里。
+    stepStart = Date.now();
+    thumbnailResult = await generatePlaceholderThumbnail(out480, 'design', ext);
+    stepTimes.placeholder = Date.now() - stepStart;
   } else {
     // 其他类型（音频/文档/未知）：生成占位图
     stepStart = Date.now();
@@ -525,11 +571,63 @@ async function generateImageThumbnails(imagePath, libraryPath) {
  * 从 PSD 文件提取嵌入的缩略图
  * 优化：使用部分读取，避免加载整个 PSD 文件到内存
  */
-async function extractPSDThumbnail(psdPath, outputPath) {
+async function extractPSDThumbnail(psdPath, outputPath, options = {}) {
+  const jpeg = await extractPsdEmbeddedJpeg(psdPath);
+  if (!jpeg) return null;
+
+  try {
+    const metadata = await sharp(jpeg.buffer).metadata();
+
+    // 目标高度：缩略图 480；预览那边会传更大的值（内嵌预览本身多大就用多大，
+    // withoutEnlargement 保证不会把小预览吹成大图）
+    const targetHeight = options.targetHeight || 480;
+    const aspectRatio = metadata.width / metadata.height;
+    const targetWidth = Math.round(targetHeight * aspectRatio);
+
+    await sharp(jpeg.buffer)
+      .resize(targetWidth, targetHeight, {
+        fit: 'inside',
+        kernel: 'lanczos3',
+        withoutEnlargement: true
+      })
+      .sharpen({ sigma: 1.0, m1: 0.8, m2: 1.5 })
+      .webp({
+        quality: 95,
+        effort: 4,
+        smartSubsample: false
+      })
+      .toFile(outputPath);
+
+    const info = await sharp(outputPath).metadata();
+    const stats = fs.statSync(outputPath);
+    return {
+      width: info.width || targetWidth,
+      height: info.height || targetHeight,
+      size: stats.size,
+      path: outputPath,
+      from: 'psd-embedded'
+    };
+  } catch (error) {
+    console.warn(`PSD 内嵌预览转码失败: ${error.message}`);
+    return null;
+  }
+}
+
+/**
+ * 从 PSD 的 Image Resources 里抠出**作者自己存的预览 JPEG**（资源号 1033/1036）。
+ *
+ * 为什么单独抽出来：缩略图要 480 高的小图，预览要尽量大 —— 但"怎么从 PSD 里把
+ * 这段 JPEG 找出来"只该有一份实现。两处各写一遍，迟早一处修了一处没修。
+ *
+ * 读文件用的是偏移读取，不把整个 PSD 读进内存（几百 MB 的 PSD 很常见）。
+ *
+ * @returns {Promise<{buffer: Buffer, width: number, height: number, resourceId: number}|null>}
+ */
+async function extractPsdEmbeddedJpeg(psdPath) {
   let fd = null;
   try {
     fd = fs.openSync(psdPath, 'r');
-    
+
     // 读取头部（前 100 字节足够获取基本信息）
     const headerBuffer = Buffer.alloc(100);
     fs.readSync(fd, headerBuffer, 0, 100, 0);
@@ -552,7 +650,7 @@ async function extractPSDThumbnail(psdPath, outputPath) {
     const maxReadSize = Math.min(imageResourcesLength, 2 * 1024 * 1024);
     const resourcesBuffer = Buffer.alloc(maxReadSize);
     fs.readSync(fd, resourcesBuffer, 0, maxReadSize, imageResourcesOffset + 4);
-    
+
     fs.closeSync(fd);
     fd = null;
 
@@ -567,9 +665,9 @@ async function extractPSDThumbnail(psdPath, outputPath) {
       const resourceId = resourcesBuffer.readUInt16BE(offset + 4);
       const nameLength = resourcesBuffer.readUInt8(offset + 6);
       const namePadding = nameLength % 2 === 0 ? nameLength + 2 : nameLength + 1;
-      
+
       if (offset + 6 + namePadding + 4 > endOffset) break;
-      
+
       const dataSize = resourcesBuffer.readUInt32BE(offset + 6 + namePadding);
       const dataPadding = dataSize % 2 === 0 ? dataSize : dataSize + 1;
 
@@ -580,45 +678,15 @@ async function extractPSDThumbnail(psdPath, outputPath) {
         // 跳过前 28 字节的头部信息
         const jpegOffset = dataOffset + 28;
         const jpegSize = dataSize - 28;
-        
+
         if (jpegOffset + jpegSize > endOffset) {
           throw new Error('Thumbnail data exceeds buffer');
         }
-        
-        const jpegData = resourcesBuffer.slice(jpegOffset, jpegOffset + jpegSize);
 
-        // 先获取原始缩略图尺寸
+        const jpegData = resourcesBuffer.subarray(jpegOffset, jpegOffset + jpegSize);
         const metadata = await sharp(jpegData).metadata();
 
-        // 使用高质量缩放，保持宽高比
-        const aspectRatio = metadata.width / metadata.height;
-        const targetHeight = 480;
-        const targetWidth = Math.round(targetHeight * aspectRatio);
-
-        // 简化处理策略
-        const processStart = Date.now();
-        await sharp(jpegData)
-          .resize(targetWidth, targetHeight, {
-            fit: 'inside',
-            kernel: 'lanczos3',
-            withoutEnlargement: metadata.width >= 500
-          })
-          .sharpen({ sigma: 1.0, m1: 0.8, m2: 1.5 })
-          .webp({
-            quality: 95,
-            effort: 4,
-            smartSubsample: false
-          })
-          .toFile(outputPath);
-        const processTime = Date.now() - processStart;
-
-        const stats = fs.statSync(outputPath);
-        return {
-          width: targetWidth,
-          height: targetHeight,
-          size: stats.size,
-          path: outputPath
-        };
+        return { buffer: jpegData, width: metadata.width, height: metadata.height, resourceId };
       }
 
       offset += 6 + namePadding + 4 + dataPadding;
@@ -627,7 +695,7 @@ async function extractPSDThumbnail(psdPath, outputPath) {
     throw new Error('No thumbnail found in PSD');
   } catch (error) {
     if (fd !== null) {
-      try { fs.closeSync(fd); } catch (e) {}
+      try { fs.closeSync(fd); } catch (e) { /* 忽略 */ }
     }
     console.warn(`Failed to extract PSD thumbnail: ${error.message}`);
     return null;
@@ -785,6 +853,97 @@ function frameTimestamps(duration) {
  * 从视频提取封面
  * @returns {Promise<{width,height,size,path}|null>}
  */
+/**
+ * 用 ffmpeg 解一张"sharp 解不了"的静态图，输出与其他缩略图一致的 webp。
+ *
+ * 为什么需要：libvips 这个构建只带 jpeg/png/webp/tiff/gif/svg/heif 的解码器，
+ * 而 ffmpeg 恰好能解 psd / tga / exr / hdr / jp2 / qoi / dds / dpx / bmp / pnm。
+ * 两个解器合起来，库里绝大多数"能打开的图"就都有缩略图了。
+ *
+ * 走 ffmpeg → 临时 JPEG → sharp → webp 这条路，与视频封面完全一致，
+ * 不直接让 ffmpeg 输出 webp 是为了统一色彩/尺寸处理，少一条分支少一处坑。
+ */
+/**
+ * 用 ffmpeg 把一张静态图解成 PNG 文件（放在 outFile）。成功返回 true。
+ *
+ * 为什么单独抽出来：缩略图和预览（utils/preview.js）都要走这一步，
+ * 而"第一次认不出来、第二次显式指定解码器"这套重试逻辑只该有一份 ——
+ * 复制粘贴的结果必然是"缩略图能出、点开却没有"这种前后不一致的 bug。
+ *
+ * 输出 PNG 而不是 JPEG：PNG/PSD/TGA/EXR 都可能带透明通道，JPEG 会把透明压成黑块。
+ */
+async function decodeStillWithFfmpeg(imagePath, outFile, options = {}) {
+  const ffmpeg = await getFfmpegPath();
+  if (!ffmpeg) return false;
+
+  const { execFile } = require('child_process');
+  const util = require('util');
+  const execFileAsync = util.promisify(execFile);
+
+  const maxSize = options.maxSize || constants.THUMBNAIL_GENERATION.TARGET_WIDTH || 640;
+  const ext = path.extname(imagePath);
+  const hint = formats.getFfmpegCodecHint(ext);
+
+  const attempts = [
+    ['-i', imagePath],
+    // TGA 家族（tga/targa/icb/vda/vst）没有 magic，image2 解复用器只按扩展名认，
+    // 于是"换个后缀就解不开"。第二次显式告诉它用哪个解码器。
+    ...(hint ? [['-f', 'image2', '-c:v', hint, '-i', imagePath]] : []),
+  ];
+
+  for (let i = 0; i < attempts.length; i += 1) {
+    try {
+      if (fs.existsSync(outFile)) fs.unlinkSync(outFile);
+
+      // 缩放表达式里必须带 min(iw,·)/min(ih,·)：只写
+      // `scale=4096:4096:force_original_aspect_ratio=decrease` 时，ffmpeg 会把
+      // **小图放大**到 4096 宽（400×200 的 TGA → 4096×2048），白等一次转码，
+      // 缓存里还多出几十倍大的文件。实测就是这么发现的。
+      const scaleExpr = `scale='min(${maxSize},iw)':'min(${maxSize},ih)':force_original_aspect_ratio=decrease`;
+
+      await execFileAsync(ffmpeg, [
+        '-hide_banner', '-loglevel', 'error',
+        ...attempts[i],
+        '-frames:v', '1',
+        '-vf', scaleExpr,
+        '-y', outFile,
+      ], { timeout: 60000, maxBuffer: 16 * 1024 * 1024 });
+
+      if (fs.existsSync(outFile) && fs.statSync(outFile).size > 0) return true;
+    } catch (error) {
+      const detail = String(error.stderr || error.message || '').trim().split('\n').pop();
+      console.warn(`  ⚠️ ffmpeg 解图失败（第 ${i + 1} 次${hint ? '，解码器 ' + hint : ''}）${path.basename(imagePath)}: ${detail}`);
+    }
+  }
+
+  return false;
+}
+
+async function extractStillThumbnail(imagePath, outputPath) {
+  const targetWidth = constants.THUMBNAIL_GENERATION.TARGET_WIDTH || 640;
+  const tempPng = outputPath.replace(/\.webp$/i, '_still.png');
+
+  try {
+    const ok = await decodeStillWithFfmpeg(imagePath, tempPng, { maxSize: targetWidth });
+    if (!ok) return null;
+
+    const metadata = await sharp(tempPng).metadata();
+    const width = metadata.width || targetWidth;
+    const height = metadata.height || targetWidth;
+
+    await sharp(tempPng)
+      .resize(targetWidth, Math.round(targetWidth * (height / width)), { fit: 'inside', withoutEnlargement: true })
+      .webp({ quality: 90 })
+      .toFile(outputPath);
+
+    return { width, height, size: fs.statSync(outputPath).size, decoder: 'ffmpeg' };
+  } catch (err) {
+    return null;
+  } finally {
+    if (fs.existsSync(tempPng)) { try { fs.unlinkSync(tempPng); } catch { /* 忽略 */ } }
+  }
+}
+
 async function extractVideoThumbnail(videoPath, outputPath) {
   const ffmpeg = await getFfmpegPath();
   if (!ffmpeg) return null;
@@ -942,6 +1101,11 @@ module.exports = {
   getImageMetadata,
   generateImageThumbnails,
   clearSharpCache,
+  extractPsdEmbeddedJpeg,
+  getFfmpegPath,
+  getFfprobePath,
+  probeVideo,
+  decodeStillWithFfmpeg,
   SUPPORTED_FORMATS,
   ALL_FORMATS
 };

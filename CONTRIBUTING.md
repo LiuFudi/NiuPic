@@ -9,8 +9,8 @@
 - 版本号（应用内「关于」，或仓库 `niupic/manifest` 的 `version`）
 - 系统环境：fnOS 版本、CPU 架构（x86 / ARM）、素材库所在盘（SSD/HDD）、素材规模（多少张）
 - 复现步骤，以及**实际看到什么**和**期望看到什么**
-- 相关日志：应用数据目录下的 `logs/`（fnOS 上是 `/volN/@appdata/niupic/logs/`，`N` 是系统
-  存储空间号，以你的 NAS 为准），贴报错附近几十行
+- 相关日志：应用自己的日志文件（fnOS 上是 `/volN/@appdata/niupic/info.log`，`N` 是系统
+  存储空间号，以你的 NAS 为准；平台侧还有 `/var/log/apps/niupic.log`），贴报错附近几十行
 - 截图 / 录屏（涉及界面问题时几乎必需）
 
 **别贴**：访问口令、JWT token、真实文件路径里的私人信息（打码到只剩层级结构即可）。

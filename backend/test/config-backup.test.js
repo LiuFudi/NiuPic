@@ -24,6 +24,7 @@
 
 const { test, before, after } = require('node:test');
 const assert = require('node:assert');
+const { execFileSync } = require('node:child_process');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
@@ -31,10 +32,14 @@ const path = require('path');
 let configModule;
 let configDir;
 const originalPkgVar = process.env.TRIM_PKGVAR;
+const originalPkgEtc = process.env.TRIM_PKGETC;
 
 before(() => {
   configDir = fs.mkdtempSync(path.join(os.tmpdir(), 'niupic-config-'));
   process.env.TRIM_PKGVAR = configDir;
+  // 配置目录的解析结果会被模块缓存，所以顺手把 TRIM_PKGETC 摘掉：
+  // 否则在装了 NiuPic 的机器上跑测试，配置会写进真实的 etc/ 目录里去。
+  delete process.env.TRIM_PKGETC;
   // 必须在设置 TRIM_PKGVAR 之后再 require，避免模块级缓存拿到别的目录
   configModule = require('../utils/config.js');
 });
@@ -42,6 +47,8 @@ before(() => {
 after(() => {
   if (originalPkgVar === undefined) delete process.env.TRIM_PKGVAR;
   else process.env.TRIM_PKGVAR = originalPkgVar;
+  if (originalPkgEtc === undefined) delete process.env.TRIM_PKGETC;
+  else process.env.TRIM_PKGETC = originalPkgEtc;
   fs.rmSync(configDir, { recursive: true, force: true });
 });
 
@@ -104,5 +111,54 @@ test('备份写入失败不影响主流程', () => {
     assert.strictEqual(main.themeColor, '#3b82f6', '主文件仍然写成功');
   } finally {
     fs.rmdirSync(backupPath());
+  }
+});
+
+/**
+ * 配置的正式位置是 etc/（TRIM_PKGETC，卸载不删），老位置是 var/（TRIM_PKGVAR）。
+ *
+ * 为什么必须锁住这条：把配置挪到 etc/ 是为了让"升级/重装"天然保住用户配置，
+ * 但搬迁一旦写错，表现就是**用户升级后素材库列表和口令全没了**（比不搬更糟）。
+ * 所以这里同时验证三件事：落在 etc/、老配置被带过来、老文件仍然留着。
+ *
+ * 目录解析结果在模块里缓存，同一个进程里没法重解析一次，所以用子进程跑干净的一次。
+ */
+test('配置优先落在 etc/，并把 var/ 里的老配置带过去（老文件保留）', () => {
+  const etcDir = fs.mkdtempSync(path.join(os.tmpdir(), 'niupic-etc-'));
+  const varDir = fs.mkdtempSync(path.join(os.tmpdir(), 'niupic-var-'));
+
+  try {
+    // 模拟"从 2.5.4 及更早升上来"的用户：配置还在 var/
+    fs.writeFileSync(
+      path.join(varDir, 'config.json'),
+      JSON.stringify({ libraries: [], themeColor: '#abcdef' })
+    );
+
+    const script = `
+      const cfg = require(${JSON.stringify(require.resolve('../utils/config.js'))});
+      cfg.loadConfig(true);
+    `;
+    execFileSync(process.execPath, ['-e', script], {
+      env: { ...process.env, TRIM_PKGETC: etcDir, TRIM_PKGVAR: varDir },
+    });
+
+    const inEtc = path.join(etcDir, 'config.json');
+    assert.ok(fs.existsSync(inEtc), '配置应该落在 etc/');
+    assert.strictEqual(
+      JSON.parse(fs.readFileSync(inEtc, 'utf8')).themeColor,
+      '#abcdef',
+      '老配置（var/）必须被带过来'
+    );
+    assert.ok(
+      fs.existsSync(path.join(varDir, 'config.json')),
+      '老位置那份要留着当兜底（是复制不是移动）'
+    );
+    assert.ok(
+      !fs.readdirSync(etcDir).some((name) => name.startsWith('.niupic-write-test-')),
+      '可写性探测文件不该残留'
+    );
+  } finally {
+    fs.rmSync(etcDir, { recursive: true, force: true });
+    fs.rmSync(varDir, { recursive: true, force: true });
   }
 });

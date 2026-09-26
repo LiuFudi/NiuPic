@@ -47,6 +47,13 @@ class LibraryDatabase {
         console.warn('[DB] WAL checkpoint warning:', e.message);
       }
     }, checkpointInterval); // 10分钟（降低I/O开销，不影响性能）
+    // **后台维护定时器必须 unref**：它只是"顺手做一次的维护"，不该成为
+    // "进程必须活着"的理由。不 unref 的后果实测过 —— 测试里只要有人 new 了
+    // LibraryDatabase 又没走到 close()，`npm test` 就永远不退出（看起来像卡死），
+    // 排查时完全看不出是这里。生产不受影响（HTTP 服务自己撑着事件循环）。
+    if (typeof this.walCheckpointInterval.unref === 'function') {
+      this.walCheckpointInterval.unref();
+    }
   }
 
   initTables() {

@@ -41,6 +41,7 @@ import UploadProgress from './UploadProgress';
 import EmptyState from './EmptyState';
 import FileViewer from './FileViewer';
 import ImageViewer from './ImageViewer';
+import { displayUrlFor } from '../utils/displayUrl';
 import ContextMenu, { menuItems } from './ContextMenu';
 import UndoToast from './UndoToast';
 import RatingToast from './RatingToast';
@@ -204,6 +205,12 @@ function ImageWaterfall() {
   const getOriginalUrl = useCallback((image) => {
     if (!currentLibraryId) return '';
     return imageAPI.getOriginalUrl(currentLibraryId, image.path);
+  }, [currentLibraryId]);
+
+  // 显示用 URL：图片走后端预览路由（浏览器不认的格式由后端转码），
+  // 视频/文档等仍用原始字节。判定集中在 utils/displayUrl.js 一处。
+  const getDisplayUrl = useCallback((image) => {
+    return displayUrlFor(currentLibraryId, image);
   }, [currentLibraryId]);
 
   // 图片点击处理
@@ -676,6 +683,7 @@ function ImageWaterfall() {
           onIndexChange={handleViewerIndexChange}
           onClose={() => setPhotoIndex(-1)}
           getOriginalUrl={getOriginalUrl}
+          getDisplayUrl={getDisplayUrl}
           getThumbnailUrl={getThumbnailUrl}
           onRequestMore={loadMoreImages}
           hasMore={imageLoadingState.hasMore}

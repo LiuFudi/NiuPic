@@ -14,10 +14,12 @@ const express = require('express');
 const router = express.Router();
 const multer = require('multer');
 const path = require('path');
+const { resolveInside, PathEscapeError } = require('../utils/safePath');
 const fs = require('fs');
 const { asyncHandler } = require('../middleware/errorHandler');
 const { processImage } = require('../../utils/scanner');
 const logger = require('../utils/logger');
+const formats = require('../config/formats');
 
 // 配置 multer 使用内存存储
 const storage = multer.memoryStorage();
@@ -87,7 +89,7 @@ router.post('/', upload.array('files', 50), asyncHandler(async (req, res) => {
   const db = dbPool.acquire(library.path);
   const libraryPath = library.path;
   const targetPath = targetFolder 
-    ? path.join(libraryPath, targetFolder)
+    ? resolveInside(libraryPath, targetFolder)
     : libraryPath;
 
   // 确保目标文件夹存在
@@ -168,10 +170,9 @@ router.post('/', upload.array('files', 50), asyncHandler(async (req, res) => {
         size: file.size
       });
       
-      // 添加到待处理列表（只处理图片文件）
-      const ext = path.extname(filename).toLowerCase();
-      const imageExts = ['.jpg', '.jpeg', '.png', '.webp', '.gif', '.bmp', '.tiff', '.svg'];
-      if (imageExts.includes(ext)) {
+      // 添加到待处理列表：能不能出缩略图由 formats.js 一处判定
+      // （以前是写死的 8 个后缀，上传 PSD/HEIC/TGA/相机 RAW 时缩略图不会生成）
+      if (formats.isImageExt(path.extname(filename))) {
         filesToProcess.push({ filePath, filename });
       }
     } catch (error) {

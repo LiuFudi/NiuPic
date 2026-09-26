@@ -12,11 +12,14 @@
 
 const express = require('express');
 const router = express.Router();
+const { resolveInside, PathEscapeError } = require('../utils/safePath');
 const path = require('path');
 const fs = require('fs');
 const { asyncHandler } = require('../middleware/errorHandler');
 const { validatePagination } = require('../middleware/validator');
 const { getNiuPicPath } = require('../config');
+const preview = require('../../utils/preview');
+const formats = require('../config/formats');
 
 // 服务实例（从 app 中获取）
 let imageService;
@@ -169,11 +172,16 @@ router.get('/thumbnail/:libraryId/:filename', (req, res) => {
       return res.status(404).send('Library not found');
     }
     
+    // 文件名必须是**单个文件名**：不允许带分隔符或 .. （缩略图路由也踩过穿越）
+    if (!/^[^/\\]+$/.test(filename) || filename === '.' || filename === '..') {
+      return res.status(403).send('非法文件名');
+    }
+
     // 使用分片结构：取文件名前2个字符作为分片目录
     const hash = filename.replace(/\.[^/.]+$/, '');
     const shard = hash.slice(0, 2);
     const niupicPath = getNiuPicPath(library.path);
-    const thumbnailPath = path.join(niupicPath, 'thumbnails', shard, filename);
+    const thumbnailPath = resolveInside(niupicPath, path.join('thumbnails', shard, filename));
     
     if (!fs.existsSync(thumbnailPath)) {
       return res.status(404).send('Thumbnail not found');
@@ -181,6 +189,9 @@ router.get('/thumbnail/:libraryId/:filename', (req, res) => {
     
     res.sendFile(thumbnailPath);
   } catch (error) {
+    if (error instanceof PathEscapeError) {
+      return res.status(403).send('非法路径');
+    }
     console.error('❌ 缩略图错误:', error.message);
     res.status(500).send('Error serving thumbnail');
   }
@@ -207,18 +218,91 @@ router.get('/original/:libraryId/*', (req, res) => {
       return res.status(404).send('Library not found');
     }
     
-    const fullPath = path.join(library.path, imagePath);
-    
-    if (!fs.existsSync(fullPath)) {
+    // 这里是穿越的重灾区：以前直接 path.join(library.path, imagePath) 就 sendFile，
+    // 于是 `../../../../etc/passwd` 能读出来（而且当时这个路由还免鉴权）。
+    const fullPath = resolveInside(library.path, imagePath);
+
+    if (!fs.existsSync(fullPath) || !fs.statSync(fullPath).isFile()) {
       return res.status(404).send('Image not found');
     }
-    
+
     res.sendFile(fullPath);
   } catch (error) {
+    if (error instanceof PathEscapeError) {
+      return res.status(403).send('非法路径');
+    }
     console.error('Error serving original image:', error);
     res.status(500).send('Error serving image');
   }
 });
+
+/**
+ * 获取可显示的预览图
+ * GET /api/image/preview/:libraryId/*?size=4096
+ *
+ * 前端显示**统一**走这个路由，不自己判断"这个格式能不能显示"：
+ *   - 浏览器自己就认的格式（jpg/png/webp/gif/avif/bmp/svg）→ 原样发原图，不转码不失真；
+ *   - 浏览器不认的（heic/tiff/psd/tga/exr/qoi/dds… 以及各家相机 RAW）→ 按需转 webp 并缓存。
+ * 这样"能不能看"只取决于后端有没有解码器，与用户用什么浏览器无关。
+ */
+router.get('/preview/:libraryId/*', asyncHandler(async (req, res) => {
+  const { libraryId } = req.params;
+  const imagePath = req.params[0];
+
+  const config = require('../../utils/config').loadConfig();
+
+  let library = config.libraries.find(lib => lib.id === parseInt(libraryId));
+  if (!library) {
+    library = config.libraries.find(lib => lib.id == libraryId);
+  }
+  if (!library) {
+    return res.status(404).json({ success: false, message: '素材库不存在' });
+  }
+
+  // 与 /original 同样过一遍路径校验：这里也会 readFile/sendFile。
+  // 必须自己把 PathEscapeError 翻成 403 —— 漏了这一步它会被全局错误处理接走，
+  // 客户端拿到的是 500「服务器内部错误」，看着像故障而不是"你越界了"。
+  let fullPath;
+  try {
+    fullPath = resolveInside(library.path, imagePath);
+  } catch (error) {
+    if (error instanceof PathEscapeError) {
+      return res.status(403).json({ success: false, message: '非法路径' });
+    }
+    throw error;
+  }
+
+  if (!fs.existsSync(fullPath) || !fs.statSync(fullPath).isFile()) {
+    return res.status(404).json({ success: false, message: '文件不存在' });
+  }
+
+  const ext = path.extname(fullPath).toLowerCase().slice(1);
+
+  // 1) 浏览器直接认：发原图（保留动图、保留 EXIF 方向、支持 Range）
+  if (!preview.needsConversion(fullPath)) {
+    res.set('Cache-Control', 'private, max-age=86400');
+    return res.sendFile(fullPath);
+  }
+
+  // 2) 需要转码：只有"图片"类别才转，其它类型明确回 415，前端据此退回占位
+  if (!preview.isConvertible(fullPath)) {
+    return res.status(415).json({
+      success: false,
+      message: `不支持的预览格式：${ext || '无扩展名'}`,
+      decoder: formats.getImageDecoder(ext),
+      category: formats.getCategory(ext),
+    });
+  }
+
+  const result = await preview.ensurePreview(fullPath, library.path, { size: req.query.size });
+  if (!result) {
+    return res.status(422).json({ success: false, message: '这个文件解不出预览图（可能已损坏或格式变体不受支持）' });
+  }
+
+  res.set('Content-Type', 'image/webp');
+  res.set('Cache-Control', 'private, max-age=86400');
+  res.sendFile(result.path);
+}));
 
 /**
  * 更新图片评分

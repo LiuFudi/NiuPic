@@ -9,9 +9,12 @@
  * 应用常量配置
  */
 
+// 格式清单只有一份：src/config/formats.js。这里不再抄一遍。
+const formats = require('./formats');
+
 module.exports = {
-  // 支持的图片格式
-  SUPPORTED_FORMATS: ['jpg', 'jpeg', 'png', 'webp', 'gif', 'bmp', 'tiff'],
+  // 支持的图片格式（所有能出缩略图的，含 RAW 与 ffmpeg 解的静态图）
+  SUPPORTED_FORMATS: formats.IMAGE_EXT,
   
   // 缩略图配置
   THUMBNAIL: {

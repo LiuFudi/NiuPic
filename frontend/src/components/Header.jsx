@@ -17,6 +17,7 @@ import ThemeColorPicker from './ThemeColorPicker';
 import ScanMenu from './ScanMenu';
 import FilterSortPanel from './FilterSortPanel';
 import LayoutSettings from './LayoutSettings';
+import ThumbnailSizePopover from './ThumbnailSizePopover';
 import { libraryAPI, scanAPI, watchAPI } from '../api';
 import { countActiveFilters, filterModeLabel } from '../utils/filters';
 import { createLogger } from '../utils/logger';
@@ -142,7 +143,7 @@ function Header() {
       <header className="flex-shrink-0 border-b border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800">
         {/* 顶部栏 */}
         <div className="h-14 flex items-center justify-between px-4">
-          <h1 className="text-lg font-bold text-gray-900 dark:text-white">牛图 NiuPic</h1>
+          <h1 className="text-lg font-bold text-gray-900 dark:text-white">NiuPic</h1>
           
           <div className="flex items-center gap-2">
             <ScanMenu libraryId={currentLibraryId} />
@@ -263,15 +264,22 @@ function Header() {
       {/* 三段式：左（标题）/ 中（筛选按钮 + 搜索框，居中）/ 右（缩略图、布局、扫描、主题色）
           左右两段都 flex-1，所以中间那段是**顶栏正中**，而不是"标题右边剩下的地方"。 */}
       <div className="h-14 flex items-center gap-4 px-6">
-        <div className="flex-1 min-w-0">
-          <h1 className="text-xl font-bold text-gray-900 dark:text-white whitespace-nowrap">牛图 NiuPic</h1>
+        {/* 左：logo。**不加 min-w-0** —— flex 项的默认最小宽度就是内容宽度，
+            所以它不会被压到文字宽度以下（上一版加了 min-w-0，结果被中间抢走了空间）。 */}
+        <div className="flex-1">
+          <h1 className="text-xl font-bold text-gray-900 dark:text-white whitespace-nowrap">NiuPic</h1>
           <p className="text-xs text-gray-500 dark:text-gray-400 whitespace-nowrap hidden 2xl:block">轻量快速的图片素材库管理</p>
         </div>
 
         {/* 中间：搜索框居中，筛选按钮**挂在它左边**。
             按钮用 absolute right-full 挂在搜索框左侧，这样它不会把搜索框推离中心
             （用 flex 排一排的话，搜索框会往右偏半个按钮宽度，实测偏了 107px）。 */}
-        <div className="flex-none w-[28rem] max-w-[40vw]">
+        {/* 中段：搜索框。
+            flex-1 + **max-w-[28rem]**：宽屏时顶到 28rem（就是最初那个宽度）就停住，多出来的
+            空间还给左右两段（所以 logo 不会被撑走）；窄屏时按比例被压缩 —— 先挤搜索框。
+            两种写法都试过：只写 flex-1（会长到很宽，挤 logo ✗）、只写 flex-[0_1_28rem]
+            （永远 448px 不肯缩，窄屏时把打赏按钮顶到右侧控件上 ✗）。 */}
+        <div className="flex-1 max-w-[28rem] min-w-[8rem]">
           <div className="relative w-full">
           {/* 筛选 + 排序：一个按钮开一张卡片（卡片画在图片区里，见 App.jsx） */}
           <button
@@ -295,22 +303,23 @@ function Header() {
                 </span>
               )}
             </span>
-            <span className="text-sm text-gray-700 dark:text-gray-200">
+            {/* 窄屏只留图标：文字在 2xl（≥1536px）才显示，避免顶栏被挤成一团 */}
+            <span className="hidden 2xl:inline text-sm text-gray-700 dark:text-gray-200">
               {activeFilterCount > 0 ? `${filterMode} ${activeFilterCount}` : '筛选'}
             </span>
-            <span className="w-px h-4 bg-gray-300 dark:bg-gray-600" />
+            <span className="hidden 2xl:inline-block w-px h-4 bg-gray-300 dark:bg-gray-600" />
             <ArrowUpDown className="w-4 h-4 text-gray-500 dark:text-gray-400" />
-            <span className="text-sm text-gray-700 dark:text-gray-200">{currentSortOption.label}</span>
+            <span className="hidden 2xl:inline text-sm text-gray-700 dark:text-gray-200">{currentSortOption.label}</span>
             {sort.order === 'asc'
               ? <ArrowUp className="w-3.5 h-3.5 text-gray-500" />
               : <ArrowDown className="w-3.5 h-3.5 text-gray-500" />}
             {/* 主题色也在这张卡片里，按钮上写出来，用户才知道去哪儿换色 */}
-            <span className="w-px h-4 bg-gray-300 dark:bg-gray-600" />
+            <span className="hidden 2xl:inline-block w-px h-4 bg-gray-300 dark:bg-gray-600" />
             <Palette
               className="w-4 h-4"
               style={accentColor ? { color: accentColor } : undefined}
             />
-            <span className="text-sm text-gray-700 dark:text-gray-200">主题色</span>
+            <span className="hidden 2xl:inline text-sm text-gray-700 dark:text-gray-200">主题色</span>
           </button>
 
           <div className="relative w-full">
@@ -332,18 +341,10 @@ function Header() {
         </div>
 
         {/* 右侧：其他功能 */}
-        <div className="flex-1 min-w-0 flex items-center justify-end gap-3">
-          <Sliders className="w-4 h-4 text-gray-500" />
-          <input
-            type="range"
-            min="150"
-            max="300"
-            value={thumbnailHeight}
-            onChange={(e) => handleThumbnailHeightChange(parseInt(e.target.value))}
-            className="w-32"
-          />
-          <span className="text-sm text-gray-600 dark:text-gray-400 w-12">{thumbnailHeight}px</span>
-          
+        <div className="flex-1 flex items-center justify-end gap-2">
+          {/* 缩略图大小：点图标弹出滑块（原来是常驻的滑块 + 数值，宽度一紧就挤爆顶栏） */}
+          <ThumbnailSizePopover value={thumbnailHeight} onChange={handleThumbnailHeightChange} />
+
           <LayoutSettings className="ml-2" />
 
           <ScanMenu libraryId={currentLibraryId} className="ml-2" />

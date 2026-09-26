@@ -82,6 +82,7 @@ function ImageViewer({
   onIndexChange,
   onClose,
   getOriginalUrl,
+  getDisplayUrl,
   getThumbnailUrl,
   onRequestMore,
   hasMore = false,
@@ -114,6 +115,15 @@ function ImageViewer({
   const safeIndex = index >= 0 && index < total ? index : -1;
   const current = safeIndex >= 0 ? images[safeIndex] : null;
 
+  // 显示用 URL：走后端预览路由（HEIC/RAW/TIFF/PSD… 会被后端转成 webp）
+  // 没传 getDisplayUrl 时退回原图 URL，行为与以前一致
+  const displayUrl = useMemo(() => {
+    if (!current) return '';
+    if (getDisplayUrl) return getDisplayUrl(current);
+    return getOriginalUrl ? getOriginalUrl(current) : '';
+  }, [current, getDisplayUrl, getOriginalUrl]);
+
+  // 原图 URL：只用于"打开原图"（交给浏览器/系统处理，拿到的是原始字节）
   const originalUrl = useMemo(
     () => (current && getOriginalUrl ? getOriginalUrl(current) : ''),
     [current, getOriginalUrl]
@@ -123,11 +133,11 @@ function ImageViewer({
     [current, getThumbnailUrl]
   );
 
-  const isReady = !!originalUrl && loaded.url === originalUrl && !loaded.error;
-  const isError = !!originalUrl && loaded.url === originalUrl && loaded.error;
+  const isReady = !!displayUrl && loaded.url === displayUrl && !loaded.error;
+  const isError = !!displayUrl && loaded.url === displayUrl && loaded.error;
   const isLoading = !isReady && !isError;
 
-  const decodedSize = decoded.url === originalUrl ? decoded : null;
+  const decodedSize = decoded.url === displayUrl ? decoded : null;
   // 优先使用索引里的元数据尺寸，可让占位图与原图共用同一套变换，避免切换时跳动
   const naturalWidth = Number(current?.width) || decodedSize?.width || 0;
   const naturalHeight = Number(current?.height) || decodedSize?.height || 0;
@@ -226,13 +236,16 @@ function ImageViewer({
 
   // ==================== 预加载相邻图片 ====================
   useEffect(() => {
-    if (!current || !getOriginalUrl || total <= 1) return;
+    const preloadUrl = getDisplayUrl || getOriginalUrl;
+    if (!current || !preloadUrl || total <= 1) return;
     if (preloadedRef.current.size > PRELOAD_CACHE_LIMIT) preloadedRef.current.clear();
 
     for (let step = 1; step <= PRELOAD_RADIUS; step += 1) {
       [safeIndex + step, safeIndex - step].forEach((target) => {
         if (target < 0 || target >= total) return;
-        const url = getOriginalUrl(images[target]);
+        // 预加载的必须是**显示用的** URL：预加载原图、显示时却请求预览，
+        // 等于白下载一遍（HEIC/RAW 甚至完全预加载不到点上）
+        const url = preloadUrl(images[target]);
         if (!url || preloadedRef.current.has(url)) return;
         preloadedRef.current.add(url);
         const img = new Image();
@@ -240,7 +253,7 @@ function ImageViewer({
         img.src = url;
       });
     }
-  }, [current, safeIndex, images, total, getOriginalUrl]);
+  }, [current, safeIndex, images, total, getDisplayUrl, getOriginalUrl]);
 
   // ==================== 切换 / 关闭 ====================
   const goTo = useCallback((nextIndex) => {
@@ -547,24 +560,24 @@ function ImageViewer({
   // ==================== 图片事件 ====================
   const handleImageLoad = useCallback((e) => {
     const { naturalWidth: width, naturalHeight: height } = e.target;
-    setLoaded({ url: originalUrl, error: false });
-    if (width && height) setDecoded({ url: originalUrl, width, height });
-  }, [originalUrl]);
+    setLoaded({ url: displayUrl, error: false });
+    if (width && height) setDecoded({ url: displayUrl, width, height });
+  }, [displayUrl]);
 
   const handleImageError = useCallback(() => {
-    logger.warn('原图加载失败:', originalUrl);
-    setLoaded({ url: originalUrl, error: true });
-  }, [originalUrl]);
+    logger.warn('图片加载失败:', displayUrl);
+    setLoaded({ url: displayUrl, error: true });
+  }, [displayUrl]);
 
   // 命中浏览器缓存时 load 事件可能早于挂载完成，这里补一次检查
   useEffect(() => {
     const el = imageRef.current;
-    if (!el || loaded.url === originalUrl) return;
+    if (!el || loaded.url === displayUrl) return;
     if (el.complete && el.naturalWidth > 0) {
-      setLoaded({ url: originalUrl, error: false });
-      setDecoded({ url: originalUrl, width: el.naturalWidth, height: el.naturalHeight });
+      setLoaded({ url: displayUrl, error: false });
+      setDecoded({ url: displayUrl, width: el.naturalWidth, height: el.naturalHeight });
     }
-  }, [originalUrl, loaded.url]);
+  }, [displayUrl, loaded.url]);
 
   /** 双击图片：适应窗口 ⇄ 100%（以双击点为锚点） */
   const handleImageDoubleClick = useCallback((e) => {
@@ -652,9 +665,9 @@ function ImageViewer({
 
       {!isError && (
         <img
-          key={`${current.id}-original`}
+          key={`${current.id}-display`}
           ref={imageRef}
-          src={originalUrl}
+          src={displayUrl}
           alt={current.filename}
           draggable={false}
           onClick={stopClick}

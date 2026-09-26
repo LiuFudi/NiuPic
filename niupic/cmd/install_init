@@ -25,12 +25,9 @@ echo "临时目录: ${TRIM_PKGTMP}"
 APP_PORT="${wizard_app_port:-15002}"
 echo "用户设置端口: ${APP_PORT}"
 
-# 更新 UI 配置中的端口
-UI_CONFIG="${TRIM_APPDEST}/ui/config"
-if [ -f "$UI_CONFIG" ]; then
-    sed -i "s/\"port\": \"[0-9]*\"/\"port\": \"${APP_PORT}\"/" "$UI_CONFIG"
-    echo "已更新 UI 配置端口为: ${APP_PORT}"
-fi
+# 说明：桌面入口已改成飞牛统一网关形态（app/ui/config 里是 gatewayPrefix / gatewaySocket，
+# 不再有 port 字段），所以这里不再 sed 改写 ui/config 的端口。
+# 端口只用于本机回环监听（见 server.js 的 HOST），仍写进 port.conf 供 main 使用。
 
 # 保存端口配置供 main 脚本使用
 echo "APP_PORT=${APP_PORT}" > "${TRIM_PKGVAR}/port.conf"
@@ -38,18 +35,35 @@ echo "APP_PORT=${APP_PORT}" > "${TRIM_PKGVAR}/port.conf"
 # ---- 配置恢复 ----
 # 更新版本时，飞牛会先跑一遍旧版本的卸载流程。老版本的卸载脚本会删 config.json，
 # 那份配置里装着素材库列表、访问密码、主题色等，删了就得从头配一遍。
-# 新版本的卸载脚本已经改成默认保留，这里再补一道保险：
-# 只要 config.json 不在了、而备份还在，就自动恢复。
-CONFIG_FILE="${TRIM_PKGVAR}/config.json"
-CONFIG_BAK="${TRIM_PKGVAR}/config.json.bak"
-if [ ! -f "$CONFIG_FILE" ] && [ -f "$CONFIG_BAK" ]; then
-    if cp "$CONFIG_BAK" "$CONFIG_FILE" 2>/dev/null; then
-        echo "已从备份恢复配置: ${CONFIG_BAK} -> ${CONFIG_FILE}"
-    else
-        echo "⚠️  配置恢复失败（备份文件不可读或没有写权限）"
-    fi
-elif [ -f "$CONFIG_FILE" ]; then
-    echo "配置已存在，保持不动: ${CONFIG_FILE}"
+#
+# 配置的正式位置是 etc/（TRIM_PKGETC，卸载不删）；2.5.4 及更早放在 var/（@appdata）。
+# 应用首次启动时会把 var/ 那份自动搬到 etc/（见 backend/utils/config.js），
+# 所以这里两个位置都要看一眼：任一位置有配置就什么都不做，都没有才从备份恢复。
+CONFIG_ETC_DIR="${TRIM_PKGETC:-}"
+CONFIG_VAR_DIR="${TRIM_PKGVAR}"
+
+if [ -f "${CONFIG_ETC_DIR}/config.json" ] || [ -f "${CONFIG_VAR_DIR}/config.json" ]; then
+    echo "配置已存在，保持不动: ${CONFIG_ETC_DIR}/config.json 或 ${CONFIG_VAR_DIR}/config.json"
+else
+    # 主配置没了：从任一位置的 .bak 恢复，并且**两个位置各写一份**。
+    # 为什么要两份：应用运行时按"etc 可写就用 etc，否则退回 var"选目录
+    # （见 backend/utils/config.js）；而本脚本以 root 跑，判断不了应用账号
+    # 对 etc 有没有写权限。两份都放，选哪个都不会落空。
+    for candidate in "${CONFIG_ETC_DIR}/config.json.bak" "${CONFIG_VAR_DIR}/config.json.bak"; do
+        [ -f "$candidate" ] || continue
+        for target in "${CONFIG_ETC_DIR}/config.json" "${CONFIG_VAR_DIR}/config.json"; do
+            # 只接受"目录 + 文件名"两段以上的绝对路径：变量为空时会拼出
+            # `/config.json`，那等于往文件系统根目录写东西，必须挡住。
+            case "$target" in
+                /*/*)
+                    if cp "$candidate" "$target" 2>/dev/null; then
+                        echo "已从备份恢复配置: ${candidate} -> ${target}"
+                    fi
+                    ;;
+            esac
+        done
+        break
+    done
 fi
 
 echo "=== 安装初始化完成 ==="

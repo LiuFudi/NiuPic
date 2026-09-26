@@ -11,6 +11,7 @@
 
 import { useEffect } from 'react'
 import { X, Github, Scale, ShieldAlert, Info } from 'lucide-react'
+import { withBase } from '../utils/appBase'
 
 const APP_VERSION = typeof __APP_VERSION__ === 'string' ? __APP_VERSION__ : '开发版'
 const AUTHOR_URL = 'https://github.com/LiuFudi'
@@ -44,7 +45,7 @@ export default function AboutDialog({ isOpen, onClose, version }) {
         <div className="flex items-center justify-between px-5 py-3 border-b border-gray-200 dark:border-gray-700">
           <h2 className="flex items-center gap-2 text-base font-semibold text-gray-800 dark:text-gray-100">
             <Info className="w-4 h-4" />
-            关于牛图 NiuPic
+            关于 NiuPic
           </h2>
           <button
             onClick={onClose}
@@ -59,7 +60,7 @@ export default function AboutDialog({ isOpen, onClose, version }) {
         <div className="px-5 py-4 space-y-4 text-sm text-gray-700 dark:text-gray-300">
           <div>
             <div className="text-lg font-semibold text-gray-900 dark:text-gray-100">
-              牛图 NiuPic <span data-testid="about-version" className="text-blue-600 dark:text-blue-400">v{ver}</span>
+              NiuPic <span data-testid="about-version" className="text-blue-600 dark:text-blue-400">v{ver}</span>
             </div>
             <div className="mt-1 text-xs text-gray-500 dark:text-gray-400">
               为飞牛 fnOS 设计的图片素材浏览应用 · 基于 FlyPic 二次开发
@@ -79,7 +80,7 @@ export default function AboutDialog({ isOpen, onClose, version }) {
                 本项目以 <strong>GNU GPL-3.0-or-later</strong> 分发：你可以自由使用、修改、再分发，
                 但分发修改版时必须同样开源。
                 <br />
-                <a href="/LICENSE.txt" target="_blank" rel="noreferrer" className="text-blue-600 dark:text-blue-400 hover:underline" data-testid="about-license-link">
+                <a href={withBase('/LICENSE.txt')} target="_blank" rel="noreferrer" className="text-blue-600 dark:text-blue-400 hover:underline" data-testid="about-license-link">
                   查看协议全文（LICENSE.txt）
                 </a>
               </div>

@@ -57,9 +57,25 @@ class ConflictError extends AppError {
 }
 
 /**
+ * 路径越界（防穿越）。
+ *
+ * safePath.js 抛的是它自己的 PathEscapeError，这里统一翻成 403 ——
+ * 兜底的意义在于：**忘了在路由里 catch 的写法也能得到 403 而不是 500**。
+ * 500 会让"有人在试探目录穿越"看起来像"应用坏了"，日志和告警都会被带偏。
+ */
+const pathEscapeToAppError = (err) => {
+  if (err && err.name === 'PathEscapeError') {
+    return new AppError(`非法路径：${err.message}`, 403, 'PATH_ESCAPE');
+  }
+  return err;
+};
+
+/**
  * 错误处理中间件
  */
 const errorHandler = (err, req, res, next) => {
+  err = pathEscapeToAppError(err);
+
   // 操作性错误（预期的错误）
   if (err.isOperational) {
     return res.status(err.statusCode).json({

@@ -750,17 +750,27 @@ async function syncLibrary(libraryPath, db, forceRebuildFolders = false, onProgr
 
     const total = toAdd.length + toDelete.length;
     let processed = 0;
+    const syncFailed = [];
 
     // Process new files in batches
     const batchSize = 100;
     for (let i = 0; i < toAdd.length; i += batchSize) {
       const batch = toAdd.slice(i, i + batchSize);
-      await Promise.all(
+      const results = await Promise.all(
         batch.map(relativePath => {
           const fullPath = path.join(libraryPath, relativePath);
-          return processImage(fullPath, libraryPath, db);
+          return processImage(fullPath, libraryPath, db)
+            .then((r) => ({ relativePath, r }))
+            .catch((error) => ({ relativePath, r: { status: 'error', error: error.message } }));
         })
       );
+
+      // 结果以前是被丢掉的：新增文件解不开时，同步照样报"成功"
+      for (const { relativePath, r } of results) {
+        if (r && r.status === 'error') {
+          syncFailed.push({ path: relativePath, error: String(r.error || '').slice(0, 160) });
+        }
+      }
 
       processed += batch.length;
 
@@ -846,7 +856,11 @@ async function syncLibrary(libraryPath, db, forceRebuildFolders = false, onProgr
     }
 
     const totalTime = (Date.now() - startTime) / 1000;
-    logger.perf(`同步完成 (${totalTime.toFixed(1)}秒)`);
+    logger.perf(`同步完成 (${totalTime.toFixed(1)}秒)` + (syncFailed.length ? ` / ${syncFailed.length} 个处理失败` : ''));
+    if (syncFailed.length > 0) {
+      logger.warn(`同步时有 ${syncFailed.length} 个文件处理失败（这些文件不在库里）：`);
+      for (const item of syncFailed.slice(0, 20)) logger.warn(`  · ${item.path} —— ${item.error}`);
+    }
 
     // 清理 Sharp 缓存
     clearSharpCache();
@@ -901,6 +915,7 @@ async function quickSync(libraryPath, db) {
   }
 
   // 处理新增文件
+  const failedList = [];
   for (const relativePath of toAdd) {
     try {
       const fullPath = path.join(libraryPath, relativePath);
@@ -909,8 +924,14 @@ async function quickSync(libraryPath, db) {
       if (folder && folder !== '.') {
         ensureFolderChain(db, folder);
       }
-      await processImage(fullPath, libraryPath, db);
+      const result = await processImage(fullPath, libraryPath, db);
+      // processImage 正常返回但状态是 error（文件损坏/格式不支持）时，
+      // 以前这里连记都不记 —— 用户只会看到"同步完成"，少了几张图却不知道原因
+      if (result && result.status === 'error') {
+        failedList.push({ path: relativePath, error: String(result.error || '').slice(0, 160) });
+      }
     } catch (err) {
+      failedList.push({ path: relativePath, error: String(err.message || err).slice(0, 160) });
       logger.error(`添加失败 ${relativePath}:`, err.message);
     }
   }
@@ -927,12 +948,17 @@ async function quickSync(libraryPath, db) {
 
   const elapsed = Date.now() - startTime;
   if (toAdd.length > 0 || toDelete.length > 0) {
-    logger.perf(`快速同步: +${toAdd.length} -${toDelete.length} (${elapsed}ms)`);
+    logger.perf(`快速同步: +${toAdd.length} -${toDelete.length} (${elapsed}ms)`
+      + (failedList.length ? ` / ${failedList.length} 个处理失败` : ''));
     // 有变化时清理 Sharp 缓存
     clearSharpCache();
   }
+  if (failedList.length > 0) {
+    logger.warn(`同步时有 ${failedList.length} 个文件处理失败（这些文件不在库里）：`);
+    for (const item of failedList.slice(0, 20)) logger.warn(`  · ${item.path} —— ${item.error}`);
+  }
 
-  return { added: toAdd.length, deleted: toDelete.length };
+  return { added: toAdd.length, deleted: toDelete.length, failed: failedList };
 }
 
 /**
@@ -969,7 +995,12 @@ async function rescanLibrary(libraryPath, db, onProgress = null, libraryId = nul
 
   if (libraryId) scanManager.startScan(libraryId, total, libraryPath);
 
-  const stats = { processed: 0, skipped: 0, errors: 0, removed: 0, total };
+  // errors 与 skipped 必须分开：
+  //   skipped = 文件没变过、缩略图也在 → 跳过是**正确**结果
+  //   errors  = 文件读不了/解不开（损坏、格式不支持、权限不对）→ 这是**失败**，要报出来
+  // 2.5.0 之前两者混在一起：色图库有 10 个文件根本没入库，日志每次都报错，
+  // 而汇总行写着"0 失败"，用户完全看不出来（见 2.5.1 的修复）。
+  const stats = { processed: 0, skipped: 0, errors: 0, removed: 0, total, failed: [] };
   const writeBuffer = [];
   const WRITE_BATCH_SIZE = constants.SCAN.WRITE_BATCH_SIZE;
 
@@ -1012,6 +1043,15 @@ async function rescanLibrary(libraryPath, db, onProgress = null, libraryId = nul
       if (result && result.status === 'processed' && result.data) {
         writeBuffer.push(result);
         stats.processed += 1;
+      } else if (result && result.status === 'error') {
+        stats.errors += 1;
+        // 只留前 20 条明细，避免一个坏目录把返回值撑爆
+        if (stats.failed.length < 20) {
+          stats.failed.push({
+            path: path.relative(libraryPath, file).replace(/\\/g, '/'),
+            error: String(result.error || '未知错误').slice(0, 160),
+          });
+        }
       } else {
         stats.skipped += 1;
       }
@@ -1072,9 +1112,18 @@ async function rescanLibrary(libraryPath, db, onProgress = null, libraryId = nul
   if (libraryId) scanManager.completeScan(libraryId, stats);
 
   logger.perf(
-    `全量重扫完成: ${stats.processed} 更新 / ${stats.skipped} 跳过（没变过） / ${stats.removed} 清理 / ${stats.errors} 失败 ` +
-    `(${((Date.now() - startTime) / 1000).toFixed(1)}s)`
+    `全量重扫完成: ${stats.processed} 更新 / ${stats.skipped} 跳过（没变过） / ${stats.removed} 清理 / `
+    + `${stats.errors} 处理失败 (${((Date.now() - startTime) / 1000).toFixed(1)}s)`
   );
+
+  // 有失败就把文件名摆出来 —— 用户要能知道"哪几个文件没进来"，而不是只看到一个数字
+  if (stats.errors > 0) {
+    logger.warn(`有 ${stats.errors} 个文件处理失败（这些文件不在库里）：`);
+    for (const item of stats.failed) logger.warn(`  · ${item.path} —— ${item.error}`);
+    if (stats.errors > stats.failed.length) {
+      logger.warn(`  …另有 ${stats.errors - stats.failed.length} 个，详见日志中"处理图片失败"的条目`);
+    }
+  }
 
   return stats;
 }

@@ -9,7 +9,7 @@
 /**
  * 把素材库里的旧索引目录 .flypic 就地迁移成 .niupic
  *
- * 牛图 NiuPic 沿用了 FlyPic 的索引格式，只是目录名换了。
+ * NiuPic 沿用了 FlyPic 的索引格式，只是目录名换了。
  * 跑一次这个脚本就不用重新扫描、不用重建缩略图（否则大库可能要几小时）。
  *
  * 用法（在 NAS 上以 root 执行）：
@@ -71,4 +71,4 @@ if (!targets.length) {
   process.exit(1);
 }
 targets.forEach(migrate);
-console.log('\n完成。回到牛图 NiuPic 里「添加素材库」指向同一路径即可，会直接识别到已有索引。');
+console.log('\n完成。回到 NiuPic 里「添加素材库」指向同一路径即可，会直接识别到已有索引。');

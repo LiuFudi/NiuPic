@@ -1,14 +1,16 @@
 {
   ".url": {
     "niupic.Application": {
-      "title": "牛图 NiuPic",
+      "title": "牛图库",
       "icon": "images/icon-{0}.png",
-      "type": "url",
-      "protocol": "http",
-      "port": "15002",
+      "type": "iframe",
+      "protocol": "",
+      "gatewayPrefix": "/app/niupic",
+      "gatewaySocket": "app.sock",
+      "url": "/app/niupic",
       "allUsers": false,
       "control": {
-        "portPerm": "editable"
+        "accessPerm": "readonly"
       }
     }
   }

@@ -182,7 +182,9 @@ export const useImageDelete = () => {
           setImages(images);
         }
         setFolders(foldersRes.folders);
-        alert(`恢复失败: ${errorMsg}\n\n提示：超过5分钟的文件已移入系统回收站，请手动从回收站恢复。`);
+        // 文案要与事实一致：文件 5 分钟后被移进**素材库自己的回收目录**
+        // （系统没有启用回收站时不会有"系统回收站"这个去处，见 docs/开发纪要 第一百节）
+        alert(`恢复失败: ${errorMsg}\n\n提示：超过 5 分钟的文件已从临时文件夹移入回收目录：\n素材库/.niupic/trash/<日期>/\n（在文件管理里显示隐藏文件即可看到、可手工恢复）`);
       } else {
         // 成功时刷新文件夹列表以确保同步
         setFolders(foldersRes.folders);

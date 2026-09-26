@@ -16,6 +16,7 @@
 //   · 不集成支付：只显示收款码图片，转账在微信/支付宝里完成，与本软件无关。
 //
 // 文案写在 config/donate.json 里，弹窗里不放催促、祈使句（规范 4.x 与附录 B）。
+// 反馈入口（Github 链接 + QQ 群号）按段落渲染，accent 段落用红色的 --err 标注。
 
 import { useEffect } from 'react';
 import { X, Heart } from 'lucide-react';
@@ -55,6 +56,7 @@ export default function DonateDialog({ isOpen, onClose }) {
   if (!isOpen) return null;
 
   const codes = (donateConfig.qrcodes || []).filter((item) => DONATE_QR[item.key]);
+  const feedback = Array.isArray(donateConfig.feedback) ? donateConfig.feedback : [];
 
   return (
     <div
@@ -107,6 +109,38 @@ export default function DonateDialog({ isOpen, onClose }) {
           <p className="m-0 text-xs leading-relaxed text-gray-500 dark:text-gray-400" data-testid="donate-note">
             {donateConfig.note}
           </p>
+
+          {/* 反馈入口：单独一行，红色部分（Github / QQ 群号）用项目的 --err 红，
+              与顶栏打赏按钮同一个色，不额外引入颜色。 */}
+          {feedback.length > 0 && (
+            <p
+              className="m-0 mt-2 text-xs leading-relaxed text-gray-500 dark:text-gray-400"
+              data-testid="donate-feedback"
+            >
+              {feedback.map((part, index) => {
+                const accent = part.accent ? 'text-err font-medium' : '';
+                if (part.href) {
+                  return (
+                    <a
+                      key={index}
+                      href={part.href}
+                      target="_blank"
+                      rel="noreferrer"
+                      className={`${accent} underline hover:opacity-80`}
+                      data-testid={`donate-feedback-link-${index}`}
+                    >
+                      {part.text}
+                    </a>
+                  );
+                }
+                return (
+                  <span key={index} className={accent}>
+                    {part.text}
+                  </span>
+                );
+              })}
+            </p>
+          )}
         </div>
       </div>
     </div>

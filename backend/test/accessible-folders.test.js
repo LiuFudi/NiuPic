@@ -31,9 +31,28 @@ const { callFnosApi, FnosApiError } = require(FNOS_API);
 
 const TOKEN = 'mock-token-for-test';
 
+/**
+ * mock 网关监听的地址。
+ *
+ * POSIX 上是临时目录里的 `.sock` 文件；**Windows 上不能这么写** ——
+ * Node 的 AF_UNIX 在 Windows 上走命名管道，把 `C:\Users\…\niupic-mock-1.sock`
+ * 交给 `server.listen()` 会直接 `listen EACCES: permission denied`（实测），
+ * 于是整个文件的用例都会连带失败。所以 Windows 上换成 `\\.\pipe\<名字>`。
+ *
+ * 被测代码不用改：`callFnosApi` 只是把 `options.socketPath` 原样交给 `http.request`。
+ */
+function mockSocketPath(name) {
+  return process.platform === 'win32'
+    ? `\\\\.\\pipe\\niupic-${name}-${process.pid}`
+    : path.join(os.tmpdir(), `niupic-${name}-${process.pid}.sock`);
+}
+
 /** 起一个假的飞牛开放 API 网关 */
 function startMockGateway(handler, socketPath) {
-  try { fs.unlinkSync(socketPath); } catch {}
+  // 命名管道理不存在文件，清理只对 POSIX 的 .sock 有意义
+  if (process.platform !== 'win32') {
+    try { fs.unlinkSync(socketPath); } catch {}
+  }
   const calls = [];
   const server = http.createServer((req, res) => {
     let body = '';
@@ -109,7 +128,7 @@ function makeFixtures() {
 // ============================================================ 协议契约
 
 test('callFnosApi 走固定路径 /api/v1/trimapp，带 Bearer Token 与 reqId', async () => {
-  const socketPath = path.join(os.tmpdir(), `niupic-mock-${process.pid}.sock`);
+  const socketPath = mockSocketPath('mock');
   const gateway = await startMockGateway(
     (payload) => ({ body: { reqId: payload.reqId, code: 0, msg: '', data: { paths: ['/vol1/1000/图片库'] } } }),
     socketPath
@@ -132,7 +151,7 @@ test('callFnosApi 走固定路径 /api/v1/trimapp，带 Bearer Token 与 reqId',
 });
 
 test('没有 TRIM_API_TOKEN 时不发请求（Token 只从环境读，不猜不落盘）', async () => {
-  const socketPath = path.join(os.tmpdir(), `niupic-mock-noauth-${process.pid}.sock`);
+  const socketPath = mockSocketPath('mock-noauth');
   const gateway = await startMockGateway(() => ({ body: { code: 0 } }), socketPath);
   try {
     await withEnv({}, async () => {
@@ -148,7 +167,7 @@ test('没有 TRIM_API_TOKEN 时不发请求（Token 只从环境读，不猜不�
 });
 
 test('HTTP 404 与业务 code != 0 都会被识别为错误', async () => {
-  const socketPath = path.join(os.tmpdir(), `niupic-mock-err-${process.pid}.sock`);
+  const socketPath = mockSocketPath('mock-err');
   const gateway = await startMockGateway((payload) => {
     if (payload.req === 'trim.not.exists') return { status: 404, body: { code: 200005, msg: 'Not Found' } };
     return { body: { reqId: payload.reqId, code: 3, msg: '业务失败' } };
@@ -169,7 +188,18 @@ test('HTTP 404 与业务 code != 0 都会被识别为错误', async () => {
 
 // ============================================================ 清单来源与降级
 
-test('开放 API 可用时以它为准，并标记 canManage=true', async () => {
+/**
+ * 下面几条用例的真值依赖"POSIX 绝对路径"：产品里的 `normalizePath` 只认以 `/` 开头的路径
+ * （飞牛是 Linux，素材库路径形如 `/vol1/1000/…`，这是刻意的），而 Windows 上
+ * `makeFixtures()` 造出来的是 `C:\Users\…\可写库`，会被直接丢掉，用例于是"跑不出结果"。
+ * 这是**环境差异，不是缺陷** —— 在 Linux/fnOS 上这些用例会真正执行（它们是安全回归的一部分）。
+ * 与其在 Windows 上显示成 5 条失败（看着像坏掉了），不如明确标成跳过并写清原因。
+ */
+const POSIX_ONLY = process.platform === 'win32'
+  ? '依赖 POSIX 绝对路径（产品只接受 /vol… 这类路径），Windows 上无法构造夹具'
+  : false;
+
+test('开放 API 可用时以它为准，并标记 canManage=true', { skip: POSIX_ONLY }, async () => {
   const fx = makeFixtures();
   try {
     await withEnv({ TRIM_DATA_ACCESSIBLE_PATHS: fx.readOnly }, async () => {
@@ -194,7 +224,7 @@ test('开放 API 可用时以它为准，并标记 canManage=true', async () => 
   } finally { fx.cleanup(); }
 });
 
-test('开放 API 不可用时回落到 TRIM_DATA_ACCESSIBLE_PATHS', async () => {
+test('开放 API 不可用时回落到 TRIM_DATA_ACCESSIBLE_PATHS', { skip: POSIX_ONLY }, async () => {
   const fx = makeFixtures();
   try {
     await withEnv({ TRIM_DATA_ACCESSIBLE_PATHS: `${fx.writable}:${fx.readOnly}` }, async () => {
@@ -215,7 +245,7 @@ test('开放 API 不可用时回落到 TRIM_DATA_ACCESSIBLE_PATHS', async () => 
   } finally { fx.cleanup(); }
 });
 
-test('只读目录排在最后且 writable=false（NiuPic 要在库里建 .niupic）', async () => {
+test('只读目录排在最后且 writable=false（NiuPic 要在库里建 .niupic）', { skip: POSIX_ONLY }, async () => {
   const fx = makeFixtures();
   try {
     await withEnv({ TRIM_DATA_ACCESSIBLE_PATHS: `${fx.readOnly}:${fx.writable}` }, async () => {
@@ -234,7 +264,7 @@ test('只读目录排在最后且 writable=false（NiuPic 要在库里建 .niupi
   } finally { fx.cleanup(); }
 });
 
-test('已添加的素材库标记 alreadyAdded，已有索引的标记 hasExistingIndex', async () => {
+test('已添加的素材库标记 alreadyAdded，已有索引的标记 hasExistingIndex', { skip: POSIX_ONLY }, async () => {
   const fx = makeFixtures();
   try {
     await withEnv({ TRIM_DATA_ACCESSIBLE_PATHS: `${fx.writable}:${fx.withIndex}` }, async () => {
@@ -272,7 +302,7 @@ test('完全拿不到授权信息时 canManage=false，并给出可照做的说�
 
 // ============================================================ 路径授权校验
 
-test('isPathAuthorized：授权内 true、授权外 false、拿不到清单 null', async () => {
+test('isPathAuthorized：授权内 true、授权外 false、拿不到清单 null', { skip: POSIX_ONLY }, async () => {
   await withEnv({}, async () => {
     const { Service, restore } = loadServiceWithStub({
       callFnosApi: async (req) => {

@@ -19,6 +19,9 @@ const rootPkg = JSON.parse(
 
 export default defineConfig({
   plugins: [react()],
+  // 资源用相对路径：这样同一份产物在 `/`（直接开端口）和 `/app/niupic/`
+  // （飞牛统一网关）两种路径下都能正确加载，不必为部署路径重新构建。
+  base: './',
   define: {
     __APP_VERSION__: JSON.stringify(rootPkg.version),
   },

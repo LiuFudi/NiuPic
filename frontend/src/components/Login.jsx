@@ -13,11 +13,24 @@ import { useState } from 'react';
 import { authAPI } from '../api/auth';
 import { setToken } from '../api/client';
 import { useAuthStore } from '../stores/useAuthStore';
+import { withBase } from '../utils/appBase';
+
+/**
+ * 登录页 Logo 的两个候选地址。
+ *
+ * 必须走 withBase()：应用挂在飞牛统一网关的 `/app/niupic/` 之后，
+ * 写成 `/ICON_256.PNG` 会打到**平台根路径**上 —— 真机实测那里回的是
+ * 桌面网页（404 text/html），浏览器解不出图 → 触发 onError → 再设成同样
+ * 404 的 `/favicon.png` → 再触发 onError …… **无限循环，logo 一直闪**。
+ */
+const LOGO_SOURCES = [withBase('/ICON_256.PNG'), withBase('/favicon.png')];
 
 export default function Login() {
   const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
+  // Logo 降级下标：0 = ICON_256.PNG，1 = favicon.png，2 = 都不行（画占位徽标）
+  const [logoIndex, setLogoIndex] = useState(0);
   
   const { hasPassword, setAuthStatus } = useAuthStore();
 
@@ -87,18 +100,31 @@ export default function Login() {
           {/* Logo */}
           <div className="text-center mb-8">
             <div className="inline-flex items-center justify-center mb-4">
-              <img 
-                src="/ICON_256.PNG" 
-                alt="NiuPic Logo" 
-                className="w-20 h-20 object-contain"
-                onError={(e) => {
-                  // 如果 ICON_256.PNG 加载失败，尝试 favicon.png
-                  e.target.src = '/favicon.png';
-                }}
-              />
+              {logoIndex < LOGO_SOURCES.length ? (
+                <img
+                  src={LOGO_SOURCES[logoIndex]}
+                  alt="NiuPic Logo"
+                  data-testid="login-logo"
+                  className="w-20 h-20 object-contain"
+                  onError={() => {
+                    // 只往后降一级，而且**不把已失败的地址再设回去** ——
+                    // 以前那版会把 src 设成同样 404 的路径，浏览器每次都触发
+                    // onError，于是 logo 无限闪烁（真机上就是这么被发现的）。
+                    setLogoIndex((i) => (i < LOGO_SOURCES.length ? i + 1 : i));
+                  }}
+                />
+              ) : (
+                // 两个地址都拿不到时，画一个不依赖网络的徽标，避免"碎图"图标
+                <div
+                  data-testid="login-logo-fallback"
+                  className="w-20 h-20 rounded-2xl bg-gradient-to-br from-blue-500 to-indigo-600 text-white flex items-center justify-center text-lg font-bold select-none"
+                >
+                  NiuPic
+                </div>
+              )}
             </div>
             <h1 className="text-3xl font-bold text-gray-900 dark:text-white mb-2">
-              牛图 NiuPic
+              NiuPic
             </h1>
             <p className="text-gray-600 dark:text-gray-400">
               {hasPassword ? '请输入密码访问' : '首次使用，请设置访问密码'}

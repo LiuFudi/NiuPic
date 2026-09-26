@@ -6,7 +6,7 @@
   ],
   "enabled": true,
   "title": "支持作者",
-  "message": "牛图 NiuPic 是免费开源软件。如果它帮到了你，可以请作者喝杯咖啡。",
+  "message": "NiuPic 是免费开源软件。如果它帮到了你，可以请作者喝杯咖啡。",
   "qrcodes": [
     {
       "label": "微信",
@@ -17,5 +17,16 @@
       "key": "alipay"
     }
   ],
-  "note": "打赏完全自愿，不影响任何功能，也不会改变软件的任何行为。"
+  "note": "打赏完全自愿，不影响任何功能，也不会改变软件的任何行为。",
+  "_feedback_readme": [
+    "遇到 BUG 的反馈入口。按段落渲染，accent=true 的段落用红色（项目的 --err 红）。",
+    "拆成段落而不是写成 HTML 字符串：文案仍然集中在这一个文件里可改，",
+    "界面侧用 JSX 渲染 —— 不需要 dangerouslySetInnerHTML，也就没有注入面。"
+  ],
+  "feedback": [
+    { "text": "如果遇到BUG，欢迎前往" },
+    { "text": "Github", "href": "https://github.com/LiuFudi/NiuPic", "accent": true },
+    { "text": "反馈或者添加" },
+    { "text": "QQ群：818299505", "accent": true }
+  ]
 }

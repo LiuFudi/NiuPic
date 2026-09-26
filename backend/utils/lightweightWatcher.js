@@ -17,9 +17,19 @@
  */
 
 const fs = require('fs').promises;
+const fsSync = require('fs');
 const path = require('path');
 const { applyChangesFromEvents } = require('./scanner');
 const dbPool = require('../database/dbPool');
+const formats = require('../src/config/formats');
+
+// 监控要"看得见"的扩展名集合：从 formats.js 取，不在这里再列一份。
+// 以前这里写死过一份约 40 个后缀的短名单（注释还写着与 scanner.js 保持一致），
+// 而扫描入库的口径是「所有文件都收」。两者不一致的后果不是少收几个，而是**删记录**：
+// _processChangedFolders 拿「库里的路径」减「这份名单扫出来的路径」来算删除，
+// 于是该目录下所有不在名单里的文件（相机 RAW、tga/exr/qoi 那批、以及各类「其他」文件）
+// 都会被当成已删除、从库里清掉 —— 表现是照片莫名消失，重启又回来。
+const SUPPORTED_EXTENSIONS = new Set(formats.ALL_EXT.map((ext) => `.${ext}`));
 
 class LightweightWatcher {
   constructor() {
@@ -85,8 +95,11 @@ class LightweightWatcher {
    * 初始化文件夹时间戳（只扫描文件夹，不扫描文件）
    */
   async _initializeFolderTimestamps(libraryPath, folderTimestamps) {
-    const folders = await this._getAllFolders(libraryPath);
-    
+    // 素材库**根目录自己**也要盯：_getAllFolders 返回的是子目录，
+    // 不含根目录，于是"直接往库根拷文件"永远不会改变任何一个被跟踪目录的 mtime
+    // —— 那份文件要等重启/手动同步/切库（走 quickSync）才会入库。
+    const folders = [libraryPath, ...(await this._getAllFolders(libraryPath))];
+
     for (const folder of folders) {
       try {
         const stats = await fs.stat(folder);
@@ -216,9 +229,12 @@ class LightweightWatcher {
       }
 
       for (const file of dbFiles) {
-        if (!fsFiles.has(file)) {
-          filesRemoved.push(file);
-        }
+        if (fsFiles.has(file)) continue;
+        // 兜底再落盘确认一次：扩展名名单只说明"我们认不认得这个类型"，
+        // 不能拿它当"文件还在不在"的判据 —— 否则任何没列进名单的文件
+        // 都会在目录 mtime 变化时被误判成删除。只有磁盘上真的没有了才删记录。
+        if (fsSync.existsSync(path.join(libraryPath, file))) continue;
+        filesRemoved.push(file);
       }
 
       // 应用变化
@@ -264,24 +280,10 @@ class LightweightWatcher {
   async _scanFolder(folder, libraryPath, fsFiles) {
     try {
       const entries = await fs.readdir(folder, { withFileTypes: true });
-      // 支持所有文件类型（与 scanner.js 保持一致）
-      const supportedExtensions = [
-        // 图片
-        '.jpg', '.jpeg', '.png', '.gif', '.webp', '.bmp', '.svg', '.tiff', '.tif', '.avif', '.heif', '.heic',
-        // 视频
-        '.mp4', '.webm', '.mov', '.avi', '.mkv', '.flv', '.m4v', '.wmv', '.mpg', '.mpeg',
-        // 音频
-        '.mp3', '.wav', '.flac', '.aac', '.m4a', '.ogg',
-        // 文档
-        '.pdf', '.txt', '.md', '.doc', '.docx', '.xls', '.xlsx', '.ppt', '.pptx',
-        // 设计
-        '.psd', '.ai', '.sketch', '.xd', '.fig'
-      ];
-
       for (const entry of entries) {
         if (entry.isFile()) {
           const ext = path.extname(entry.name).toLowerCase();
-          if (supportedExtensions.includes(ext)) {
+          if (SUPPORTED_EXTENSIONS.has(ext)) {
             const fullPath = path.join(folder, entry.name);
             const relativePath = path.relative(libraryPath, fullPath).replace(/\\/g, '/');
             fsFiles.add(relativePath);
@@ -305,9 +307,11 @@ class LightweightWatcher {
 
       // 获取这些文件夹中的所有文件
       for (const folder of deletedFolders) {
-        const relativePath = path.relative(libraryPath, folder);
+        // 统一成下划线、并且**带结尾的 /**：不带的话 `ab%` 会把 `abc.jpg`
+        // （同前缀的另一个文件）也算进来一起删掉。
+        const relativePath = path.relative(libraryPath, folder).replace(/\\/g, '/');
         const stmt = db.db.prepare('SELECT path FROM images WHERE path LIKE ?');
-        const rows = stmt.all(`${relativePath}%`);
+        const rows = stmt.all(`${relativePath}/%`);
         rows.forEach(row => filesRemoved.push(row.path));
       }
 

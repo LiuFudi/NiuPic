@@ -14,8 +14,19 @@ const logger = require('../src/utils/logger');
 
 class CleanupManager {
   constructor(options = {}) {
-    this.routineInterval = options.routineInterval || 5000; // 5 seconds
+    // 惯例清理的间隔：默认 60 秒。
+    //
+    // 以前默认 5 秒、而且每一轮都跑 5 次 global.gc()。发行包的 cmd/main 是
+    // `node server.js`（不带 --expose-gc），所以线上 global.gc 是 undefined、
+    // 白白每 5 秒醒一次；而开发时走的是 `node --expose-gc`，
+    // 等于每 5 秒做 5 次全量 GC —— 那是纯 CPU 浪费，V8 自己会管。
+    // 这个定时器的本职只是"清注册过的缓存"（目前没有注册任何缓存），
+    // 没有理由跑得比数据库空闲检查（10 秒）还勤。
+    this.routineInterval = options.routineInterval || 60000; // 60 seconds
     this.dbPool = options.dbPool;
+    // 强制 GC 只在显式打开开发模式时做（默认关）。紧急清理那条路径不受影响：
+    // 它是 memoryMonitor 超过 300MB 才会触发的罕见动作，本来就该狠一点。
+    this.devMode = options.devMode === true;
     this.caches = new Map(); // name -> cache object with clear() method
     
     this.routineIntervalId = null;
@@ -67,13 +78,8 @@ class CleanupManager {
       // Clear all registered caches
       const cachesCleared = this.clearAllCaches();
 
-      // 强制多次 GC（更激进）
-      if (global.gc) {
-        // 执行 5 次 GC 确保内存真正释放
-        for (let i = 0; i < 5; i++) {
-          global.gc();
-        }
-      }
+      // 开发模式才强制 GC：反复全量 GC 只会占着 CPU 不放，减不了常驻内存。
+      if (this.devMode && global.gc) global.gc();
 
       const memoryAfter = this.getMemoryStats();
       const rssAfter = memoryAfter.rss / 1024 / 1024;

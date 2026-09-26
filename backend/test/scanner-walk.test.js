@@ -67,7 +67,10 @@ test('递归遍历能找到各种名字的文件（大小写、中文、空格�
   const root = makeFixture();
   try {
     const files = await getAllImageFiles(root);
-    const rel = files.map((f) => path.relative(root, f)).sort();
+    // 统一成 '/' 再比：getAllImageFiles 用的是 path.join，Windows 上分隔符是 '\'，
+    // 断言写的是 '/'。这是**用例的可移植性问题**，与产品行为无关（产品在入库前会把
+    // 相对路径统一成 '/'，见 scanner.js 的 replace(/\\/g, '/')）。
+    const rel = files.map((f) => path.relative(root, f).split(path.sep).join('/')).sort();
 
     for (const want of [
       'S5M2X/2.20/103_PANA/P1000001.JPG',
@@ -91,7 +94,7 @@ test('递归遍历能找到各种名字的文件（大小写、中文、空格�
 test('跳过应用自己的目录和 node_modules', async () => {
   const root = makeFixture();
   try {
-    const rel = (await getAllImageFiles(root)).map((f) => path.relative(root, f));
+    const rel = (await getAllImageFiles(root)).map((f) => path.relative(root, f).split(path.sep).join('/'));
     assert.ok(!rel.some((p) => p.includes('.niupic')), `.niupic 里的东西不该被扫进来：${rel.join(', ')}`);
     assert.ok(!rel.some((p) => p.includes('.flypic')), '.flypic 同理');
     assert.ok(!rel.some((p) => p.includes('node_modules')), 'node_modules 同理');
@@ -112,6 +115,11 @@ test('空目录返回空数组（这是"真的没有文件"，不是出错）', 
 test('根目录读不了时抛出能看懂的错，而不是静悄悄返回空', async (t) => {
   if (process.getuid && process.getuid() === 0) {
     t.skip('root 无视权限位，跳过');
+    return;
+  }
+  if (process.platform === 'win32') {
+    // chmod 在 Windows 上改不了读权限（ACL 不是 POSIX 权限位），造不出"读不了的目录"
+    t.skip('Windows 上 chmod 不改变读权限，无法构造这个场景；Linux/fnOS 上会真正执行');
     return;
   }
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'niupic-noperm-'));

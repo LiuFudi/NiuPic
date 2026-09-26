@@ -9,8 +9,9 @@
  * 前端常量配置
  */
 
-// 支持的图片格式
-export const IMAGE_FORMATS = ['jpg', 'jpeg', 'png', 'webp', 'gif', 'bmp', 'tiff'];
+// 这里**不放**图片格式清单：唯一真源是后端 `backend/src/config/formats.js`。
+// 原来这儿抄了一份 7 个后缀的 IMAGE_FORMATS —— 没人引用、又和后端对不上，
+// 谁哪天顺手 import 它，就会得到一份"少一大半格式"的判断。
 
 // 缩略图尺寸
 export const THUMBNAIL_SIZES = {

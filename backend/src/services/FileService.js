@@ -12,6 +12,9 @@
 
 const fs = require('fs');
 const path = require('path');
+const { resolveInside, normalizeUserPath, PathEscapeError } = require('../utils/safePath');
+const { removePreviewsFor } = require('../../utils/preview');
+const { moveToRecycle, libraryTrashDir } = require('../../utils/recycle');
 const { processImage } = require('../../utils/scanner');
 const { constants } = require('../config');
 const logger = require('../utils/logger');
@@ -33,7 +36,7 @@ class FileService {
   async restoreItems(libraryId, items) {
     const db = this._getDatabase(libraryId);
     const libraryPath = db.libraryPath;
-    const backupDir = path.join(libraryPath, TEMP_BACKUP_DIR);
+    const backupDir = resolveInside(libraryPath, TEMP_BACKUP_DIR);
     const results = { success: [], failed: [] };
 
     if (!fs.existsSync(backupDir)) {
@@ -43,7 +46,7 @@ class FileService {
     for (const item of items) {
       try {
         const backupPath = path.join(backupDir, item.path);
-        const originalPath = path.join(libraryPath, item.path);
+        const originalPath = resolveInside(libraryPath, item.path);
         const metaPath = backupPath + '.meta.json';
 
         logger.fileOp(`开始恢复: ${item.path} (${item.type})`);
@@ -177,10 +180,10 @@ class FileService {
   async cleanExpiredTempFiles(libraryId) {
     const db = this._getDatabase(libraryId);
     const libraryPath = db.libraryPath;
-    const backupDir = path.join(libraryPath, TEMP_BACKUP_DIR);
+    const backupDir = resolveInside(libraryPath, TEMP_BACKUP_DIR);
     
     if (!fs.existsSync(backupDir)) {
-      return { cleaned: 0, failed: 0, thumbnailsCleaned: 0 };
+      return { cleaned: 0, failed: 0, thumbnailsCleaned: 0, recycleFailed: 0 };
     }
 
     const EXPIRY_TIME = constants.FILE_OPERATIONS.TEMP_FILE_EXPIRY_MS;
@@ -188,6 +191,8 @@ class FileService {
     let cleaned = 0;
     let failed = 0;
     let thumbnailsCleaned = 0; // 统计清理的缩略图数量
+    let recycleFailed = 0;     // 当前"挪不走、留在 temp_backup"的数量（含以前就失败的）
+    let newlyFailed = 0;       // 这一轮**新**失败的（用来决定要不要打日志，避免每分钟刷屏）
 
     // 递归扫描备份目录
     const scanDir = async (dir) => {
@@ -205,18 +210,25 @@ class FileService {
         if (fs.existsSync(metaPath)) {
           try {
             const meta = JSON.parse(fs.readFileSync(metaPath, 'utf8'));
+
+            // 之前移入回收站失败过的：文件还在（没丢），但不再每分钟重试一次
+            if (meta.recycleFailedAt) {
+              recycleFailed += 1;
+              continue;
+            }
+
             const age = now - meta.deletedAt;
             
             // 超过配置的过期时间，移入系统回收站
             if (age > EXPIRY_TIME) {
               try {
-                // 1. 清理缩略图（在移入回收站前）
+                // 1. 清理缩略图与预览缓存（在移入回收站前）
                 if (meta.imageRecords) {
                   const records = Array.isArray(meta.imageRecords) ? meta.imageRecords : [meta.imageRecords];
                   for (const record of records) {
                     if (record.thumbnail_path) {
                       try {
-                        const thumbnailFullPath = path.join(libraryPath, record.thumbnail_path);
+                        const thumbnailFullPath = resolveInside(libraryPath, record.thumbnail_path);
                         if (fs.existsSync(thumbnailFullPath)) {
                           fs.unlinkSync(thumbnailFullPath);
                           thumbnailsCleaned++;
@@ -226,19 +238,54 @@ class FileService {
                         logger.warn(`清理缩略图失败 ${record.thumbnail_path}:`, thumbError.message);
                       }
                     }
+
+                    // 预览缓存（HEIC/RAW/PSD… 转出来的那份大图）也要跟着删，
+                    // 否则文件进回收站了、转码结果还永远占着地方。
+                    // 数据库记录里的相对路径字段是 record.path（与恢复记录时用的是同一个）。
+                    if (record.path) {
+                      try {
+                        const removed = removePreviewsFor(
+                          resolveInside(libraryPath, record.path),
+                          libraryPath
+                        );
+                        if (removed > 0) logger.fileOp(`清理预览缓存: ${record.path}（${removed} 个）`);
+                      } catch (previewError) {
+                        logger.warn(`清理预览缓存失败 ${record.path}:`, previewError.message);
+                      }
+                    }
                   }
                 }
                 
-                // 2. 移入系统回收站
-                // trash v8 是 ESM 模块，需要使用动态 import
-                const { default: trash } = await import('trash');
-                await trash([fullPath]);
+                // 2. 移入回收站
+                //
+                // 以前这里用 trash 包（freedesktop 规范），但飞牛的应用账号没有家目录，
+                // 它每次都 mkdir /home/niupic 被拒 —— 文件永远卡在 temp_backup，
+                // 而且**每分钟重试一次、每次都记一条 ERROR**（真机上单个文件刷了 8052 条）。
+                // 现在改成"平台回收站 / 素材库自己的回收目录"二选一，见 utils/recycle.js。
+                const moved = moveToRecycle(fullPath, libraryPath, {
+                  originalRelative: meta.originalPath,
+                  deletedAt: meta.deletedAt,
+                });
                 fs.unlinkSync(metaPath); // 删除 meta 文件
                 cleaned++;
-                logger.info(`已将过期文件移入回收站: ${meta.originalPath}`);
+                logger.info(`已将过期文件移入回收站（${moved.kind === 'platform' ? '平台回收站' : '素材库回收目录'}）: ${meta.originalPath} → ${moved.destPath}`);
               } catch (error) {
-                logger.error(`清理失败 ${meta.originalPath}:`, error);
-                failed++;
+                // 失败**只记一次**：把原因写进 meta，下一轮直接跳过这个文件。
+                // 不这么做的话，一个挪不动的文件会每分钟刷一条 ERROR（这就是 2.5.0 之前的样子）。
+                recycleFailed += 1;
+                try {
+                  const raw = JSON.parse(fs.readFileSync(metaPath, 'utf8'));
+                  if (!raw.recycleFailedAt) {
+                    newlyFailed += 1;
+                    raw.recycleFailedAt = Date.now();
+                    raw.recycleError = String(error.message || error).slice(0, 200);
+                    fs.writeFileSync(metaPath, JSON.stringify(raw, null, 2));
+                    logger.warn(
+                      `移入回收站失败（不再重试，文件保留在 ${TEMP_BACKUP_DIR}）: ${meta.originalPath} —— ${error.message}；`
+                      + `可以手动把文件移走，或检查素材库目录权限`
+                    );
+                  }
+                } catch { /* 记不下来就退化成原来的行为 */ }
               }
             }
           } catch (error) {
@@ -252,6 +299,14 @@ class FileService {
     };
 
     await scanDir(backupDir);
+
+    // 有"新情况"才打日志：以前失败的每轮都还在，不该每轮都刷一行
+    if (cleaned > 0 || newlyFailed > 0) {
+      const stuck = recycleFailed > 0 ? `，另有 ${recycleFailed} 个此前挪不走的仍保留在 ${TEMP_BACKUP_DIR}` : '';
+      logger.info(
+        `临时文件夹清理: 移入回收站 ${cleaned} 个${stuck}；回收目录 ${libraryTrashDir(libraryPath)}`
+      );
+    }
 
     // 清理完成后，递归删除所有空文件夹
     const removeEmptyDirs = (dir) => {
@@ -326,7 +381,7 @@ class FileService {
       logger.warn('[cleanExpiredTempFiles] 清理空文件夹时出错:', error.message);
     }
 
-    return { cleaned, failed, thumbnailsCleaned };
+    return { cleaned, failed, thumbnailsCleaned, recycleFailed };
   }
 
   /**
@@ -353,7 +408,7 @@ class FileService {
 
     for (const item of items) {
       try {
-        const fullPath = path.join(libraryPath, item.path);
+        const fullPath = resolveInside(libraryPath, item.path);
 
         // 检查文件/文件夹是否存在
         if (!fs.existsSync(fullPath)) {
@@ -376,7 +431,7 @@ class FileService {
         }
 
         // 移到临时备份文件夹（5分钟内可撤销）
-        const backupDir = path.join(libraryPath, TEMP_BACKUP_DIR);
+        const backupDir = resolveInside(libraryPath, TEMP_BACKUP_DIR);
         if (!fs.existsSync(backupDir)) {
           fs.mkdirSync(backupDir, { recursive: true });
         }
@@ -504,9 +559,22 @@ class FileService {
     const db = this._getDatabase(libraryId);
     const libraryPath = db.libraryPath;
 
+    // 新名称必须**只是名字**：不接受路径分隔符、`..` / `.`、NUL、绝对路径。
+    //
+    // 为什么必须在这里拦（不是"顺手加个校验"）：以前这里拼的是
+    // `path.join(directory, newName)`，而 path.join 会老老实实处理 `..` ——
+    // 于是 newName 传 `../../sibling/x.jpg` 就能把文件搬出素材库，
+    // 目标同名时还会**覆盖库外文件**。读路径有 resolveInside 守着（2.4.2 修的），
+    // 写路径漏了这一条，等于同一扇门留了另一半没关。
+    // 上架要求第 4 条（文件读写接口要校验路径安全）对写路径同样适用。
+    const safeName = normalizeUserPath(newName); // 绝对路径/盘符/NUL 会在这里抛 PathEscapeError
+    if (!safeName || safeName === '.' || safeName === '..' || safeName.includes('/')) {
+      throw new PathEscapeError('名称不能包含路径分隔符、`..` 或空值', { name: newName });
+    }
+
     // 归一化旧路径，确保使用正斜杠
     const normalizedOldPath = oldPath.replace(/\\/g, '/');
-    const fullOldPath = path.join(libraryPath, normalizedOldPath);
+    const fullOldPath = resolveInside(libraryPath, normalizedOldPath);
 
     // 检查文件/文件夹是否存在
     if (!fs.existsSync(fullOldPath)) {
@@ -517,22 +585,24 @@ class FileService {
     const isDirectory = stat.isDirectory();
 
     const directory = path.dirname(fullOldPath);
-    const initialNewPath = path.join(directory, newName);
+    // 再走一次 resolveInside 兜底：即使上面的检查将来被放宽，也不会拼出库外路径。
+    // （对不存在的目标是安全的：它会把第一个已存在的祖先做 realpath 再比一次。）
+    const initialNewPath = resolveInside(directory, safeName);
 
     // 如果目标已存在，则自动编号避免冲突
     let finalFullNewPath = initialNewPath;
-    let finalNewName = newName;
+    let finalNewName = safeName;
 
     if (fs.existsSync(finalFullNewPath)) {
-      const ext = isDirectory ? '' : path.extname(newName);
-      const basename = isDirectory ? newName : path.basename(newName, ext);
+      const ext = isDirectory ? '' : path.extname(safeName);
+      const basename = isDirectory ? safeName : path.basename(safeName, ext);
       let counter = 1;
 
       while (fs.existsSync(finalFullNewPath)) {
         const numberedName = isDirectory
           ? `${basename} (${counter})`
           : `${basename} (${counter})${ext}`;
-        finalFullNewPath = path.join(directory, numberedName);
+        finalFullNewPath = resolveInside(directory, numberedName);
         finalNewName = numberedName;
         counter++;
       }
@@ -581,8 +651,8 @@ class FileService {
           ? `${normalizedTarget}/${fileName}`
           : fileName;
 
-        const oldFullPath = path.join(libraryPath, oldPath);
-        let newFullPath = path.join(libraryPath, newRelativeFolder);
+        const oldFullPath = resolveInside(libraryPath, oldPath);
+        let newFullPath = resolveInside(libraryPath, newRelativeFolder);
 
         // 检查源路径是否存在
         if (!fs.existsSync(oldFullPath)) {
@@ -592,7 +662,7 @@ class FileService {
 
         // 检查目标父级文件夹是否存在
         const targetFullPath = normalizedTarget
-          ? path.join(libraryPath, normalizedTarget)
+          ? resolveInside(libraryPath, normalizedTarget)
           : libraryPath;
         if (!fs.existsSync(targetFullPath)) {
           fs.mkdirSync(targetFullPath, { recursive: true });
@@ -640,7 +710,7 @@ class FileService {
               newRelativeFolder = normalizedTarget
                 ? `${normalizedTarget}/${numberedName}`
                 : numberedName;
-              newFullPath = path.join(libraryPath, newRelativeFolder);
+              newFullPath = resolveInside(libraryPath, newRelativeFolder);
               counter++;
             }
             logger.fileOp(`重命名为: ${path.basename(newFullPath)}`);
@@ -741,14 +811,14 @@ class FileService {
     const results = { success: [], failed: [], conflicts: [] };
 
     // 确保目标文件夹存在
-    const targetFullPath = path.join(libraryPath, targetFolder || '');
+    const targetFullPath = resolveInside(libraryPath, targetFolder || '');
     if (!fs.existsSync(targetFullPath)) {
       fs.mkdirSync(targetFullPath, { recursive: true });
     }
 
     for (const item of items) {
       try {
-        const srcFullPath = path.join(libraryPath, item.path);
+        const srcFullPath = resolveInside(libraryPath, item.path);
         const fileName = path.basename(item.path);
         const dstFullPath = path.join(targetFullPath, fileName);
 
@@ -872,16 +942,14 @@ class FileService {
         // 递归处理子文件夹
         await this._processFolderImages(fullPath, libraryPath, db);
       } else {
-        // 检查是否是图片文件
-        const ext = path.extname(entry.name).toLowerCase();
-        const imageExts = ['.jpg', '.jpeg', '.png', '.webp', '.gif', '.bmp', '.tiff'];
-        
-        if (imageExts.includes(ext)) {
-          try {
-            await processImage(fullPath, libraryPath, db);
-          } catch (error) {
-            logger.warn(`处理图片失败 ${entry.name}:`, error.message);
-          }
+        // 入库条件和整库扫描（utils/scanner.js 的 getAllImageFiles）保持一致：**所有文件都收**。
+        // 以前这里写死了一份 7 个后缀的短名单，于是"把文件夹复制进素材库"这条路上
+        // RAW（cr3/nef/arw…）、视频、PSD、HEIC、SVG 全都不入库 —— 用户看到的是
+        // 文件夹复制成功、网格里却什么都没有。判定统一交给 formats.js。
+        try {
+          await processImage(fullPath, libraryPath, db);
+        } catch (error) {
+          logger.warn(`处理文件失败 ${entry.name}:`, error.message);
         }
       }
     }
@@ -1025,7 +1093,7 @@ class FileService {
   async createFolder(libraryId, folderPath) {
     const db = this._getDatabase(libraryId);
     const libraryPath = db.libraryPath;
-    const fullPath = path.join(libraryPath, folderPath);
+    const fullPath = resolveInside(libraryPath, folderPath);
 
     // 检查文件夹是否已存在
     if (fs.existsSync(fullPath)) {

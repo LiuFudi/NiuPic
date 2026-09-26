@@ -10,9 +10,14 @@
  */
 
 import { api, getToken } from './client';
+import { apiBase } from '../utils/appBase.js';
 import axios from 'axios';
 
-const API_BASE = '/api';
+// ⚠️ 上传用 axios（要进度回调），不走 client.js，所以这里**必须自己**用 apiBase()。
+// 以前这里写死 `const API_BASE = '/api'` —— 应用挂在飞牛统一网关的 /app/niupic 之后，
+// 写死的 /api/upload 会打到平台根路径上，应用根本收不到请求
+// （表现是拖拽上传/粘贴上传全失败，且后端日志里一条都没有）。
+// 与《飞牛fpk开发规范》第 6.4/6.5 节同一个坑：基路径只能在一处算。
 
 export const fileAPI = {
   /**
@@ -138,7 +143,7 @@ export const fileAPI = {
       headers.Authorization = `Bearer ${token}`;
     }
 
-    const response = await axios.post(`${API_BASE}/upload`, formData, {
+    const response = await axios.post(`${apiBase()}/upload`, formData, {
       headers,
       onUploadProgress: onProgress
     });

@@ -158,6 +158,11 @@ class DatabasePool {
         }
       }
     }, checkInterval);
+    // 同上：空闲连接清理是后台维护，不持有"进程存活"的理由（否则 require 了这个
+    // 模块的单测进程就不会退出）。
+    if (typeof this.cleanupInterval.unref === 'function') {
+      this.cleanupInterval.unref();
+    }
   }
 
   /**

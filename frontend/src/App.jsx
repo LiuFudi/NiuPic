@@ -5,6 +5,7 @@
 // License version 3 or (at your option) any later version.
 // See the LICENSE file for the full text.
 
+import { appBase } from './utils/appBase.js';
 import { useEffect, useState, useRef } from 'react';
 import { io } from 'socket.io-client';
 import { useUIStore } from './stores/useUIStore';
@@ -80,7 +81,10 @@ function App() {
       ? 'http://localhost:15002'  // 开发模式：后端端口
       : window.location.origin;   // 生产模式：同源
 
+    // 统一网关下应用在 /app/<appname>/ 之后，socket.io 的握手路径也要跟着加前缀，
+    // 否则握手打不到应用（后端已做了前缀剥离，两种形态都能连上）。
     const socket = io(socketUrl, {
+      path: `${appBase()}/socket.io`,
       transports: ['websocket', 'polling'], // 优先使用 websocket
       reconnection: true,
       reconnectionDelay: 1000,
@@ -289,7 +293,16 @@ function App() {
       
     } catch (error) {
       logger.error(`加载素材库失败 (${retryCount + 1}/${maxRetries}):`, error.message);
-      
+
+      // 平台网关会话失效（真机实测：它返回 HTTP 200 + 纯文本 "invalid token"）：
+      // **不要重试、不要闪烁**。重试 5 次只会让界面反复重画，而问题出在会话上，
+      // 后端其实是好的 —— 以前这里会说"请检查后端是否启动"，方向完全错了。
+      if (error.code === 'GATEWAY_SESSION_INVALID' || error.code === 'GATEWAY_HTML_RESPONSE') {
+        setIsConnecting(false);
+        setConnectionError(error.message);
+        return;
+      }
+
       if (retryCount < maxRetries - 1) {
         // 重试
         setConnectionError(`连接服务器中... (${retryCount + 1}/${maxRetries})`);

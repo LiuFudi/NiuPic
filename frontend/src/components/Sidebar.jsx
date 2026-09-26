@@ -454,7 +454,7 @@ function Sidebar() {
         // 失败时回滚
         setUndoHistory(undoHistory);
         setFolders(foldersRes.folders);
-        alert(`恢复失败: ${errorMsg}\n\n提示：超过5分钟的文件已移入系统回收站，请手动从回收站恢复。`);
+        alert(`恢复失败: ${errorMsg}\n\n提示：超过 5 分钟的文件已从临时文件夹移入回收目录：\n素材库/.niupic/trash/<日期>/\n（在文件管理里显示隐藏文件即可看到、可手工恢复）`);
       } else {
         // 成功时刷新文件夹列表以确保同步
         setFolders(foldersRes.folders);
@@ -1530,7 +1530,7 @@ function Sidebar() {
           <button
             type="button"
             onClick={() => setShowAbout(true)}
-            title="关于牛图 NiuPic"
+                  title="关于 NiuPic"
             data-testid="sidebar-about"
             className="p-1 rounded hover:bg-gray-100 dark:hover:bg-gray-700 text-gray-500 dark:text-gray-400"
           >

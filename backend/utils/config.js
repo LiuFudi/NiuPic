@@ -15,21 +15,101 @@ let configCacheTime = 0;
 const CONFIG_CACHE_TTL = 5000; // 5秒缓存
 
 /**
- * Get config directory based on environment
+ * 目录存在且可写：真的写一个探针文件再删掉。
+ * 为什么不只看权限位/`ls`：ACL、只读挂载、父目录可写但自身只读都会骗过它，
+ * 而"保存配置失败"对用户就是"我设的东西不见了"。
+ */
+function isWritableDirectory(dir) {
+  try {
+    if (!fs.existsSync(dir)) {
+      fs.mkdirSync(dir, { recursive: true });
+    }
+    const probe = path.join(dir, `.niupic-write-test-${process.pid}`);
+    fs.writeFileSync(probe, '');
+    fs.unlinkSync(probe);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * 一次性搬迁：把老位置里的配置搬到新位置。
+ *
+ * 只在新位置**还没有**配置时做，而且是复制（老文件留着当兜底）。
+ * @returns {boolean} true = 可以安全在新位置工作（含"本来就没配置可搬"）
+ */
+function migrateLegacyConfig(targetDir) {
+  const target = path.join(targetDir, 'config.json');
+  if (fs.existsSync(target)) return true;
+
+  const others = [process.env.TRIM_PKGVAR, process.env.TRIM_PKGETC]
+    .filter((dir) => dir && path.resolve(dir) !== path.resolve(targetDir));
+
+  for (const dir of others) {
+    const legacy = path.join(dir, 'config.json');
+    if (!fs.existsSync(legacy)) continue;
+    try {
+      fs.copyFileSync(legacy, target);
+      const legacyBak = `${legacy}.bak`;
+      if (fs.existsSync(legacyBak) && !fs.existsSync(`${target}.bak`)) {
+        fs.copyFileSync(legacyBak, `${target}.bak`);
+      }
+      console.log(`📦 配置已迁移到 ${target}（原位置保留一份作为兜底）`);
+      return true;
+    } catch (error) {
+      console.warn(`⚠️ 配置迁移失败，继续使用原位置: ${error.message}`);
+      return false;
+    }
+  }
+
+  return true;
+}
+
+// 配置目录只解析一次：解析里含写权限探测与一次性迁移，不该每个请求都做一遍。
+let configDirCache = null;
+
+/**
+ * 配置目录。
+ *
+ * **优先 `etc/`（TRIM_PKGETC）** —— 飞牛在卸载时不删它，重装/升级后配置自然还在，
+ * 这是官方给"用户配置"留的位置（《飞牛fpk开发规范》第十节 10.1）。
+ *
+ * 早期版本把配置放在 `var/`（TRIM_PKGVAR，即 @appdata）：那会被卸载流程清理，
+ * 于是"每次更新 = 重装"（素材库列表、访问口令、JWT 密钥、主题色全丢），
+ * 本项目因此丢过两次配置，最后靠三层补救（卸载默认不删 + 写 .bak + 安装时自动恢复）
+ * 才稳住。规范里说得很直白：三层一个都不能少，但**更好的做法是一开始就放 etc/**。
+ *
+ * 所以这里是"能用 etc 就用 etc，不能用就退回 var"：宁可少一层理想，
+ * 也绝不能出现"配置写不进去"——那才是真把用户配置丢了。
  */
 function getConfigDir() {
-  // Check if running on fnOS
-  if (process.env.TRIM_PKGVAR) {
-    return process.env.TRIM_PKGVAR;
+  if (configDirCache) return configDirCache;
+
+  const etcDir = process.env.TRIM_PKGETC;   // fnOS：卸载不删的配置目录
+  const varDir = process.env.TRIM_PKGVAR;   // fnOS：运行数据目录（老位置）
+
+  if (etcDir && isWritableDirectory(etcDir) && migrateLegacyConfig(etcDir)) {
+    configDirCache = etcDir;
+    return configDirCache;
   }
-  
+  if (etcDir) {
+    console.warn(`⚠️ 配置目录 ${etcDir} 不可用，回退到 var/`);
+  }
+  if (varDir) {
+    configDirCache = varDir;
+    return configDirCache;
+  }
+
   // Windows
   if (process.platform === 'win32') {
-    return path.join(process.env.APPDATA || os.homedir(), 'NiuPic');
+    configDirCache = path.join(process.env.APPDATA || os.homedir(), 'NiuPic');
+    return configDirCache;
   }
-  
+
   // Linux/Mac
-  return path.join(os.homedir(), '.niupic');
+  configDirCache = path.join(os.homedir(), '.niupic');
+  return configDirCache;
 }
 
 /**

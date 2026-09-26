@@ -37,6 +37,7 @@
 const { spawnSync } = require('child_process');
 const fs = require('fs');
 const path = require('path');
+const zlib = require('zlib');
 
 // ==================== 路径 ====================
 const ROOT = path.join(__dirname, '..');
@@ -61,6 +62,93 @@ const SKIP_DEPS = args.includes('--skip-deps');
 const UPDATE_LOCK = args.includes('--update-lockfile');
 
 const nm = (p) => path.join(SERVER_DIR, 'node_modules', ...p.split('/'));
+
+/**
+ * 递归复制目录。
+ *
+ * ⚠️ 为什么要包一层、不用 `fs.cpSync`：**Node 22.x + Windows 上它会让进程直接崩掉**。
+ * 实测（node v22.23.3 / Windows 10 19045）：`fs.cpSync('backend/src', dest, {recursive:true})`
+ * 以 `0xC0000409`（STATUS_STACK_BUFFER_OVERRUN）fail-fast 退出 —— 抛不出任何 JS 异常，
+ * try/catch 也拦不住，打包脚本跑到「[3/7] 组装 niupic/app/server」打印两行之后就无声结束
+ * （`node scripts/build-fpk.js` 的退出码是 -1073740791）。同一个目录换成
+ * `fs.promises.cp`（异步版）或手写递归都正常复制 26 个文件，所以这里统一走异步版。
+ *
+ * 顺带说明：这条只在 Windows 上暴露，正是"构建脚本必须跨平台"要挡住的那类问题。
+ */
+const copyDir = (from, to) => fs.promises.cp(from, to, { recursive: true });
+
+/** 读一个 tar 头里的八进制数值字段 */
+function readTarOctal(header, offset, length) {
+  const text = header.subarray(offset, offset + length).toString('ascii').replace(/\0.*$/s, '').trim();
+  return text ? parseInt(text, 8) : 0;
+}
+
+/** 写一个 tar 头里的八进制数值字段（7 位数字 + NUL，与 bsdtar/fnpack 的写法一致） */
+function writeTarOctal(header, offset, length, value) {
+  header.write(value.toString(8).padStart(length - 1, '0'), offset, length - 1, 'ascii');
+  header[offset + length - 1] = 0;
+}
+
+/** 遍历 tar（Buffer），对每个条目回调 (header, name, size) */
+function walkTar(tar, visit) {
+  let pos = 0;
+  while (pos + 512 <= tar.length) {
+    const header = tar.subarray(pos, pos + 512);
+    const name = header.subarray(0, 100).toString('utf8').replace(/\0.*$/s, '');
+    if (!name) break; // 结束块（全零）
+    const size = readTarOctal(header, 124, 12);
+    visit(header, name, size);
+    pos += 512 + Math.ceil(size / 512) * 512;
+  }
+}
+
+/**
+ * 修正 fpk 内的权限位（构建期自校验，不通过就让构建失败）。
+ *
+ * 为什么必须有这一步：**fnpack 的 Windows 构建（fnpack-1.2.3-windows-amd64）把每个条目
+ * 都写成 0666、目录写成 0777**。后果是致命的 —— `cmd/main` 进包后**没有执行位**，
+ * 而应用中心是直接执行 `/var/apps/<appname>/cmd/main` 的，应用根本起不来。
+ * 这正是《飞牛fpk开发规范》9.3 与坑 15 记的那个现象（"进包后没有执行位 → 起不来"）；
+ * Linux 版 fnpack 会保留源文件的权限位，所以在 Linux 上打包不会暴露这个问题。
+ * 实测：Windows 打出来的 cmd/main 是 `-rw-rw-rw-`、cmd/ 目录是 `drwxrwxrwx`。
+ *
+ * 做法：**只改 tar 头里的 mode 字段并重算头部 checksum**，不碰任何文件内容 ——
+ * 所以 manifest 里的 `checksum`（= md5(app.tgz)）依旧有效，包里其它字节一个没动。
+ * 目录 0755、其它文件 0644、`cmd/*` 0755。对 Linux 打出来的包是幂等的（本来就是这些值）。
+ */
+function fixFpkModes(fpkPath) {
+  const tar = zlib.gunzipSync(fs.readFileSync(fpkPath));
+  let patched = 0;
+
+  walkTar(tar, (header, name, size) => {
+    const isDir = String.fromCharCode(header[156]) === '5' || name.endsWith('/');
+    const desired = isDir ? 0o755 : (name.startsWith('cmd/') ? 0o755 : 0o644);
+    const current = readTarOctal(header, 100, 8);
+    if (current === desired) return;
+    writeTarOctal(header, 100, 8, desired);
+    // checksum 必须重算：算的时候 checksum 字段本身按 8 个空格计
+    header.fill(0x20, 148, 156);
+    let sum = 0;
+    for (const byte of header) sum += byte;
+    header.write(sum.toString(8).padStart(6, '0'), 148, 6, 'ascii');
+    header[154] = 0;
+    header[155] = 0x20;
+    patched += 1;
+  });
+
+  // 反向校验：包里的 cmd/main 必须是 0755，否则宁可构建失败也不要发出装不上的包
+  let mainMode = null;
+  walkTar(tar, (header, name) => { if (name === 'cmd/main') mainMode = readTarOctal(header, 100, 8); });
+  if (mainMode !== 0o755) {
+    fail(`fpk 权限修正失败：cmd/main 的权限是 ${mainMode === null ? '未找到' : mainMode.toString(8)}，期望 755`);
+  }
+
+  if (patched > 0) {
+    fs.writeFileSync(fpkPath, zlib.gzipSync(tar, { level: 9 }));
+    log(`   修正 ${patched} 个条目的权限位（cmd/*=755、目录=755、其余=644）`);
+  }
+  log('   已确认 cmd/main = 755');
+}
 
 // ==================== 飞牛运行时上的原生模块 ====================
 // 飞牛依赖应用 nodejs_v22 => Node 22 => NODE_MODULE_VERSION 127；系统为 Debian（glibc）
@@ -93,6 +181,31 @@ const NATIVE_MODULES = [
 // 无需手工下载：@img/sharp-linux-x64 与 @img/sharp-libvips-linux-x64
 
 // ==================== 工具函数 ====================
+
+/**
+ * 把目录里的文件权限归一到"文件 644、目录 755"。
+ *
+ * 为什么是**强制** 644 而不是"保留原有 +x"：app/server 与 app/ui 里没有一个文件是靠
+ * 可执行位运行的（`cmd/main` 用 `node server.js` 起服务；`app/ui/config` 是给平台读的
+ * 文本）。而"保留 +x"等于把上游工具链的权限习惯放进来 —— 实测 Vite 写出的 dist 就是
+ * 755，于是成品里前端产物带可执行位、而干净重建的却没有（两边都是这台机器构建的，
+ * 差别只在谁先写的文件）。**结果不确定的规则不是规则。**
+ *
+ * node_modules 一律不碰：里面可能有需要可执行位的预编译产物，动了会坏。
+ */
+function normalizeModes(dir) {
+  if (!fs.existsSync(dir)) return;
+  for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+    const full = path.join(dir, entry.name);
+    if (entry.isDirectory()) {
+      if (entry.name === 'node_modules') continue;
+      fs.chmodSync(full, 0o755);
+      normalizeModes(full);
+    } else if (entry.isFile()) {
+      fs.chmodSync(full, 0o644);
+    }
+  }
+}
 const log = (msg) => console.log(msg);
 const step = (n, total, msg) => console.log(`\n[${n}/${total}] ${msg}`);
 const fail = (msg) => {
@@ -191,6 +304,41 @@ function detectPackageManager() {
   return null;
 }
 
+/**
+ * pnpm 主版本必须 ≥ 10。
+ *
+ * 为什么：解析"给飞牛用的 Linux x64 依赖"靠的是 `pnpm-workspace.yaml` 里的
+ * `supportedArchitectures`，而 **pnpm 9 及更早不认这个设置** —— 它会老老实实按当前
+ * 开发机的平台装可选依赖，于是 sharp 的 `@img/sharp-linux-x64` 根本不会出现，
+ * 构建最后停在 `缺少 @img/sharp-linux-x64，依赖未按 linux x64 解析`。
+ * 那个报错完全不提 pnpm，实测时很容易往"依赖解析/镜像"方向查半天（本轮就踩了）。
+ * 所以这里提前拦一道，把原因和解法直接写出来。
+ */
+function assertPnpmVersion(pm) {
+  if (pm !== 'pnpm') {
+    log('   提示: 用 pnpm 构建才走锁文件与跨平台依赖解析，npm 不保证同样的结果');
+    return;
+  }
+  const result = spawnSync('pnpm', ['--version'], {
+    encoding: 'utf8',
+    shell: process.platform === 'win32',
+  });
+  const text = String(result.stdout || '').trim();
+  const major = Number.parseInt(text.split('.')[0], 10);
+  if (!Number.isFinite(major)) {
+    log(`   提示: 读不到 pnpm 版本（${text || '空'}），跳过版本检查`);
+    return;
+  }
+  if (major < 10) {
+    fail(
+      `pnpm ${text} 太旧：跨平台解析 Linux 依赖需要 pnpm ≥ 10\n` +
+      '  （pnpm 9 不认 supportedArchitectures → sharp 的 linux-x64 包装不上）\n' +
+      '  升级：npm i -g pnpm@10',
+    );
+  }
+  log(`   pnpm ${text}（≥ 10，supportedArchitectures 生效）`);
+}
+
 function detectFnpack() {
   if (process.env.FNPACK) {
     if (!fs.existsSync(process.env.FNPACK)) fail(`FNPACK 指向的文件不存在: ${process.env.FNPACK}`);
@@ -264,6 +412,13 @@ function readManifestVersion() {
 function checkVersionConsistency() {
   const manifestVersion = readManifestVersion();
 
+  // 上架要求第 6 条：版本号必须是**纯三段数字** x.y.z。
+  // 4 段式无效；`x.y.z-beta` 这种非数字后缀在平台看来和 `x.y.z` 是同一个版本
+  // （区分不了、也就升不了级），所以构建期就拦住，别等审核才发现。
+  if (!/^\d+\.\d+\.\d+$/.test(manifestVersion)) {
+    fail(`版本号必须是纯三段式 x.y.z（飞牛应用中心要求），当前是 "${manifestVersion}"`);
+  }
+
   const pkg = JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8'));
   if (pkg.version !== manifestVersion) {
     fail(`版本号不一致：niupic/manifest = ${manifestVersion}，package.json = ${pkg.version}`);
@@ -288,6 +443,7 @@ const TOTAL_STEPS = SKIP_DEPS ? 5 : 7;
   console.log('║        NiuPic 飞牛 fnOS 打包（跨平台，无需 Docker）        ║');
   console.log('╚════════════════════════════════════════════════════════════╝');
   log(`   包管理器: ${pm}   fnpack: ${fnpack}`);
+  assertPnpmVersion(pm);
 
   // 版本号交叉校验放在最前面：改漏了直接停，不要浪费几分钟构建完才发现
   const version = checkVersionConsistency();
@@ -325,10 +481,10 @@ const TOTAL_STEPS = SKIP_DEPS ? 5 : 7;
     log(`   文件: ${file}`);
   }
   for (const dir of ['src', 'database', 'utils']) {
-    fs.cpSync(path.join(BACKEND_DIR, dir), path.join(SERVER_DIR, dir), { recursive: true });
+    await copyDir(path.join(BACKEND_DIR, dir), path.join(SERVER_DIR, dir));
     log(`   目录: ${dir}/`);
   }
-  fs.cpSync(path.join(FRONTEND_DIR, 'dist'), path.join(SERVER_DIR, 'public'), { recursive: true });
+  await copyDir(path.join(FRONTEND_DIR, 'dist'), path.join(SERVER_DIR, 'public'));
   // 协议全文要跟着成品走：用户装完包，在应用里就能看到自己拿到的是什么协议，
   // 不用去翻仓库。两处都放 —— app/ui/ 是 fnOS 的应用资源目录（规矩里的位置），
   // server/public/ 由后端静态托管，界面上「关于」页直接链过去。
@@ -339,10 +495,18 @@ const TOTAL_STEPS = SKIP_DEPS ? 5 : 7;
   // 运维小工具一起进包（例如从 FlyPic 迁移索引目录的脚本）
   const TOOLS_DIR = path.join(ROOT, 'scripts', 'tools');
   if (fs.existsSync(TOOLS_DIR)) {
-    fs.cpSync(TOOLS_DIR, path.join(SERVER_DIR, 'scripts'), { recursive: true });
+    await copyDir(TOOLS_DIR, path.join(SERVER_DIR, 'scripts'));
     log('   目录: scripts/  ← scripts/tools');
   }
   log('   目录: public/  ← frontend/dist');
+
+  // 权限归一：**只针对我们自己的文件**（app/server 里的源码与前端产物、app/ui、cmd、wizard）。
+  // 为什么需要：写文件的工具/编辑器权限各不相同（本机实测：某些源文件是 600、前端产物是 755），
+  // 一路 cpSync 下来就会带进成品。fnOS 安装时会把整个应用目录改成 niupic:niupic 775
+  // （真机实测），所以这不是"能不能跑"的问题，而是"拆开包看见一堆 600 文件"的问题。
+  // node_modules 不动 —— 里面可能有需要可执行位的预编译产物，动了会坏。
+  normalizeModes(SERVER_DIR);
+  normalizeModes(path.join(PACK_DIR, 'app', 'ui'));
 
   // ---------- 3. 解析 Linux x64 glibc 生产依赖 ----------
   step(stepNo++, TOTAL_STEPS, '解析 Linux x64 glibc 依赖');
@@ -420,7 +584,7 @@ const TOTAL_STEPS = SKIP_DEPS ? 5 : 7;
 
   const depsNodeModules = path.join(DEPS_DIR, 'node_modules');
   if (!fs.existsSync(depsNodeModules)) fail('build/server-deps/node_modules 不存在');
-  fs.cpSync(depsNodeModules, nm(''), { recursive: true });
+  await copyDir(depsNodeModules, nm(''));
   log(`   node_modules 就位: ${(fs.readdirSync(nm('')).length)} 个顶层条目`);
 
   // pnpm 在 Linux/macOS 上会把 node_modules/.bin 建成**软链接**，而且指向构建机的
@@ -475,8 +639,8 @@ const TOTAL_STEPS = SKIP_DEPS ? 5 : 7;
   if (!fs.existsSync(sharpBinding)) fail('缺少 @img/sharp-linux-x64，依赖未按 linux x64 解析');
   log('   sharp: @img/sharp-linux-x64 (由 supportedArchitectures 解析)');
 
-  // ---------- 5. 统一脚本换行符 ----------
-  step(stepNo++, TOTAL_STEPS, '修正 cmd/ 脚本换行符 (CRLF -> LF)');
+  // ---------- 5. 统一脚本换行符与包内权限 ----------
+  step(stepNo++, TOTAL_STEPS, '修正 cmd/ 脚本换行符与权限 (CRLF -> LF, chmod 755)');
   const cmdDir = path.join(PACK_DIR, 'cmd');
   if (fs.existsSync(cmdDir)) {
     for (const name of fs.readdirSync(cmdDir)) {
@@ -486,6 +650,22 @@ const TOTAL_STEPS = SKIP_DEPS ? 5 : 7;
       fs.writeFileSync(file, content, 'utf8');
       log(`   ${name}`);
     }
+  }
+
+  // 包内权限：cmd/* 必须 755，其余文件 644。
+  //
+  // 为什么必须在构建期强制：**fnpack 按源文件权限打包**，而权限位跟着文件系统走 ——
+  // 在 Windows / WSL 的 /mnt 下解开源码包再构建时，cmd/main 很可能没有执行位，
+  // 进包后应用中心直接起不来（规范 9.3 与坑 15；本项目已经犯过两次）。
+  // 所以这里不赌 git 的 core.fileMode，构建前一律重设。
+  // normalizeModes 会跳过 node_modules（里面有需要可执行位的预编译产物）。
+  normalizeModes(PACK_DIR);
+  if (fs.existsSync(cmdDir)) {
+    for (const name of fs.readdirSync(cmdDir)) {
+      const file = path.join(cmdDir, name);
+      if (fs.statSync(file).isFile()) fs.chmodSync(file, 0o755);
+    }
+    log('   cmd/* -> 755，其余文件 -> 644');
   }
 
   // ---------- 6. 调用 fnpack 生成 fpk ----------
@@ -500,6 +680,9 @@ const TOTAL_STEPS = SKIP_DEPS ? 5 : 7;
   const finalPath = path.join(DIST_DIR, finalName);
   fs.rmSync(finalPath, { force: true });
   fs.renameSync(produced, finalPath);
+
+  // 权限位后处理 + 自校验（Windows 版 fnpack 会把 cmd/main 写成 0666 → 装上去起不来）
+  fixFpkModes(finalPath);
 
   const size = (fs.statSync(finalPath).size / 1024 / 1024).toFixed(2);
   console.log('\n╔════════════════════════════════════════════════════════════╗');

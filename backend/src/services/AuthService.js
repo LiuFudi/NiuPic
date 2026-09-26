@@ -26,7 +26,8 @@ class AuthService {
     this.loginAttempts = new Map();
     
     // 定期清理过期的登录尝试记录（每10分钟）
-    setInterval(() => {
+    // unref：这是维护任务，不该让进程因为它而无法退出（见 database/db.js 的注释）
+    this.attemptCleanupTimer = setInterval(() => {
       const now = Date.now();
       for (const [ip, data] of this.loginAttempts.entries()) {
         if (now - data.lastAttempt > ATTEMPT_WINDOW) {
@@ -34,6 +35,9 @@ class AuthService {
         }
       }
     }, 10 * 60 * 1000);
+    if (typeof this.attemptCleanupTimer.unref === 'function') {
+      this.attemptCleanupTimer.unref();
+    }
   }
 
   /**

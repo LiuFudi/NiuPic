@@ -34,11 +34,12 @@ const path = require('path');
 /** 读文件头部多少字节（RAW 的预览一般在前面；CR3 的预览也在前部 box 里） */
 const DEFAULT_SCAN_BYTES = 64 * 1024 * 1024;
 
-/** 认得出来的 RAW 扩展名 */
-const RAW_EXTENSIONS = new Set([
-  'dng', 'cr2', 'cr3', 'crw', 'nef', 'nrw', 'arw', 'srf', 'sr2', 'rw2', 'rwl',
-  'orf', 'raf', 'srw', 'pef', 'ptx', '3fr', 'fff', 'iiq', 'mrw', 'x3f', 'erf', 'kdc', 'mef',
-]);
+/**
+ * 认得出来的 RAW 扩展名 —— 清单在 src/config/formats.js，这里只引用。
+ * 以前这里自己写了一份 24 个，比 formats 里那份少 15 个（raw/ari/bay/cap/… 那些
+ * 冷门后缀的文件明明在库里，却因为这份短名单抽不到内嵌预览）。
+ */
+const RAW_EXTENSIONS = new Set(require('../src/config/formats').RAW_EXT);
 
 function isRawFile(filePath) {
   const ext = path.extname(filePath).toLowerCase().slice(1);

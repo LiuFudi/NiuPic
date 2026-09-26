@@ -9,6 +9,7 @@
  * 认证状态管理
  */
 
+import { apiBase } from '../utils/appBase.js';
 import { create } from 'zustand';
 
 export const useAuthStore = create((set) => ({
@@ -35,5 +36,13 @@ export const useAuthStore = create((set) => ({
   setAuthenticated: () => set({ isAuthenticated: true }),
 
   // 登出
-  logout: () => set({ isAuthenticated: false })
+  // 登出：除了本地状态，还要让服务端把会话 Cookie 清掉 ——
+  // 否则"退出登录"之后，图片 URL 仍然能直接打开（Cookie 还有效 30 天）
+  logout: () => {
+    try {
+      fetch(`${apiBase()}/auth/logout`, { method: 'POST', credentials: 'same-origin' }).catch(() => {});
+    } catch { /* 忽略网络错误 */ }
+    try { localStorage.removeItem('niupic_token'); } catch { /* 忽略 */ }
+    set({ isAuthenticated: false });
+  }
 }));

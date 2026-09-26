@@ -71,7 +71,9 @@ describe('打赏入口：收款码内嵌', () => {
 });
 
 describe('打赏入口：文案约束（规范第四节 + 附录 B）', () => {
-  const texts = [donateConfig.title, donateConfig.message, donateConfig.note,
+  // 反馈那一段也算"文案"，同样要过下面这些检查（不然它会成为漏网之鱼）
+  const feedbackText = (donateConfig.feedback || []).map((p) => p.text).join('');
+  const texts = [donateConfig.title, donateConfig.message, donateConfig.note, feedbackText,
     ...(donateConfig.qrcodes || []).map((q) => q.label)].join('\n');
 
   it('不出现催促 / 祈使 / 情感绑架的措辞', () => {
@@ -94,6 +96,36 @@ describe('打赏入口：文案约束（规范第四节 + 附录 B）', () => {
 
   it('有 enabled 开关（供分发者在源码层面整体关闭，界面里改不到）', () => {
     expect(typeof donateConfig.enabled).toBe('boolean');
+  });
+});
+
+describe('打赏入口：反馈入口（Github 链接 + QQ 群）', () => {
+  const parts = donateConfig.feedback || [];
+  const link = parts.find((p) => p.href);
+  const qq = parts.find((p) => (p.text || '').includes('QQ群'));
+
+  it('整句与要求一致：Github 与 QQ 群在同一行里', () => {
+    expect(parts.map((p) => p.text).join(''))
+      .toBe('如果遇到BUG，欢迎前往Github反馈或者添加QQ群：818299505');
+  });
+
+  it('Github 是可点的超链接，指向仓库', () => {
+    expect(link && link.text).toBe('Github');
+    expect(link && link.href).toBe('https://github.com/LiuFudi/NiuPic');
+  });
+
+  it('Github 与 QQ 群号都标成红色，且组件真的把 accent 渲染成红色类', () => {
+    expect(link && link.accent).toBe(true);
+    expect(qq && qq.text).toBe('QQ群：818299505');
+    expect(qq && qq.accent).toBe(true);
+    // 只写在配置里不算数：组件侧必须真的用项目的 --err 红（与打赏按钮同色）
+    const src = readFileSync(join(ROOT, 'frontend', 'src', 'components', 'DonateDialog.jsx'), 'utf8');
+    expect(src).toContain("part.accent ? 'text-err");
+  });
+
+  it('反馈与"自愿"那句分成两行，原来那句一字未改', () => {
+    expect(donateConfig.note).toBe('打赏完全自愿，不影响任何功能，也不会改变软件的任何行为。');
+    expect(donateConfig.note).not.toContain('QQ群');
   });
 });
 
